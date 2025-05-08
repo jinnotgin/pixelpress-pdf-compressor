@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PixelPress PDF Compressor</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark sticky-top">
+        <a class="navbar-brand" href="#">PixelPress PDF Compressor</a>
+    </nav>
+
+    <div class="container mt-4 mb-5">
+        <div class="jumbotron bg-light p-4 p-md-5 rounded">
+            <h1 class="display-4">Compress large Figma PDFs</h1>
+            <p class="lead">Upload a PDF (up to 100MB) to convert its pages into images within a (often smaller) PDF.<br>Ideal for complex documents that need broad compatibility or size reduction.</p>
+        </div>
+
+        <div class="card shadow-sm mb-4">
+            <div class="card-header">
+                <h5 class="mb-0">Upload Your PDF</h5>
+            </div>
+            <div class="card-body">
+                <form id="upload-form" enctype="multipart/form-data">
+                    <div class="form-group">
+                        <label for="pdf-file">Choose PDF file:</label>
+                        <div class="custom-file">
+                            <input type="file" class="custom-file-input" id="pdf-file" name="pdf_file" accept=".pdf" required>
+                            <label class="custom-file-label" for="pdf-file" data-browse="Browse">Select file...</label>
+                        </div>
+                        <small class="form-text text-muted">Max file size: 100MB.</small>
+                    </div>
+
+                    <div class="form-group">
+                        <a href="#advanced-options" data-toggle="collapse" class="text-primary">
+                            Advanced Options <small>(click to expand/collapse)</small>
+                        </a>
+                        <div id="advanced-options" class="collapse mt-2">
+                            <div class="card card-body bg-light border">
+                                <label for="dpi">DPI (Dots Per Inch):</label>
+                                <input type="number" class="form-control" id="dpi" name="dpi" value="72" min="10" max="600">
+                                <small class="form-text text-muted">Higher DPI means better image quality but can increase file size before PDF stream compression. Default: 72.</small>
+                            </div>
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-primary btn-lg">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-upload mr-1" viewBox="0 0 16 16">
+                            <path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5z"/>
+                            <path d="M7.646 1.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1-.708.708L8.5 2.707V11.5a.5.5 0 0 1-1 0V2.707L5.354 4.854a.5.5 0 1 1-.708-.708l3-3z"/>
+                        </svg>
+                        Upload and Process
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <div id="progress-area" class="card shadow-sm mb-4" style="display: none;">
+            <div class="card-header">
+                <h5 class="mb-0">Processing Status</h5>
+            </div>
+            <div class="card-body">
+                <div id="status-message" class="font-weight-bold mb-2">Starting...</div>
+                <div class="progress" style="height: 25px;">
+                    <div id="progress-bar" class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 0%;" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">0%</div>
+                </div>
+            </div>
+        </div>
+
+        <div id="result-area" class="card shadow-sm mb-4" style="display: none;">
+            <div class="card-header bg-success text-white">
+                 <h5 class="mb-0">Processing Complete!</h5>
+            </div>
+            <div class="card-body text-center">
+                <div id="result-message" class="alert alert-success"></div>
+                 <a id="download-link" href="#" class="btn btn-success btn-lg" style="display: none;">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-download mr-1" viewBox="0 0 16 16">
+                        <path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5z"/>
+                        <path d="M7.646 11.854a.5.5 0 0 0 .708 0l3-3a.5.5 0 0 0-.708-.708L8.5 10.293V1.5a.5.5 0 0 0-1 0v8.793L5.354 8.146a.5.5 0 1 0-.708.708l3 3z"/>
+                    </svg>
+                    Download Processed PDF
+                </a>
+            </div>
+        </div>
+
+        <div id="error-area" class="alert alert-danger mt-4" style="display: none;">
+            <strong>Error:</strong> <span id="error-message"></span>
+        </div>
+    </div>
+
+    <footer class="footer mt-auto py-3 bg-light text-center">
+        <div class="container">
+            <span class="text-muted">v0.1 - Created by <a href="https://linjin.me" target="_blank">Jin</a>, using <a href="https://developers.googleblog.com/en/gemini-2-5-pro-io-improved-coding-performance/" target="_blank">Gemini 2.5 Pro Preview (I/O Edition)</a>.</span>
+        </div>
+    </footer>
+
+    <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.5.3/dist/umd/popper.min.js"></script>
+    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
