@@ -163,3 +163,4 @@ uploads/*
 processed/*
 cloudflare_command.txt
 tasks.db
+.DS_Store
