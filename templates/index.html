@@ -14,8 +14,8 @@
 
     <div class="container mt-4 mb-5">
         <div class="jumbotron bg-light p-4 p-md-5 rounded">
-            <h1 class="display-4">Compress large Figma PDFs</h1>
-            <p class="lead">Upload a PDF (up to 100MB) to convert its pages into images within a (often smaller) PDF.<br>Ideal for complex documents that need broad compatibility or size reduction.</p>
+            <h1 class="display-4">Compress or Combine Figma PDFs</h1>
+            <p class="lead">Upload a PDF (up to 100MB) to convert its pages into images within a new PDF (often smaller), or combine all pages into a single image. Ideal for complex documents needing size reduction or broad compatibility.</p>
         </div>
 
         <div class="card shadow-sm mb-4">
@@ -34,11 +34,27 @@
                     </div>
 
                     <div class="form-group">
+                        <label>Output Format:</label>
+                        <div>
+                            <div class="form-check form-check-inline">
+                                <input class="form-check-input" type="radio" name="output_target_format" id="format-pdf-output" value="pdf" checked>
+                                <label class="form-check-label" for="format-pdf-output">PDF</label>
+                            </div>
+                            <div class="form-check form-check-inline">
+                                <input class="form-check-input" type="radio" name="output_target_format" id="format-image-output" value="image">
+                                <label class="form-check-label" for="format-image-output">Image (Stitched Pages)</label>
+                            </div>
+                        </div>
+                    </div>
+
+
+                    <div class="form-group">
                         <a href="#advanced-options" data-toggle="collapse" class="text-primary">
                             Advanced Options <small>(click to expand/collapse)</small>
                         </a>
                         <div id="advanced-options" class="collapse mt-2">
                             <div class="card card-body bg-light border">
+                                <p class="text-muted small">These settings control how PDF pages are converted to images. This applies to pages within the "New PDF" output, or to the final "Single Image" output type.</p>
                                 <div class="form-group">
                                     <label for="dpi">DPI (Dots Per Inch):</label>
                                     <input type="number" class="form-control" id="dpi" name="dpi" value="72" min="10" max="600">
@@ -46,23 +62,22 @@
                                 </div>
 
                                 <div class="form-group mt-3">
-                                    <label>Image Format:</label>
+                                    <label>Page/Image Raster Format:</label>
                                     <div>
-																			<div class="form-check form-check-inline">
-																					<input class="form-check-input" type="radio" name="image_format" id="format-jpeg" value="jpeg" checked> <!-- JPEG IS checked -->
-																					<label class="form-check-label" for="format-jpeg">JPEG (Lossy, Smaller)</label>
-																			</div>
-
                                         <div class="form-check form-check-inline">
-                                            <input class="form-check-input" type="radio" name="image_format" id="format-png" value="png"> <!-- PNG is NOT checked -->
+                                            <input class="form-check-input" type="radio" name="image_format" id="format-jpeg" value="jpeg" checked>
+                                            <label class="form-check-label" for="format-jpeg">JPEG (Lossy, Smaller)</label>
+                                        </div>
+                                        <div class="form-check form-check-inline">
+                                            <input class="form-check-input" type="radio" name="image_format" id="format-png" value="png">
                                             <label class="form-check-label" for="format-png">PNG (Lossless, Larger)</label>
                                         </div>
                                     </div>
                                 </div>
 
-                                <div class="form-group" id="jpeg-quality-group"> <!-- Removed style="display: none;" -->
+                                <div class="form-group" id="jpeg-quality-group">
                                     <label for="jpeg_quality">JPEG Quality (1-100):</label>
-                                    <input type="number" class="form-control" id="jpeg_quality" name="jpeg_quality" value="75" min="1" max="100"> <!-- Removed disabled -->
+                                    <input type="number" class="form-control" id="jpeg_quality" name="jpeg_quality" value="75" min="1" max="100">
                                     <small class="form-text text-muted">Applies if JPEG format is selected. Higher is better quality & larger size. Default: 75.</small>
                                 </div>
                             </div>
@@ -98,7 +113,7 @@
             <div class="card-body text-center">
                 <div id="result-message" class="alert alert-success"></div>
                 <div id="compression-stats" class="mb-3" style="display: none;">
-                    <p class="mb-1"><strong>Compression Details:</strong></p>
+                    <p class="mb-1"><strong>File Size Details:</strong></p>
                     <span id="original-size" class="d-block"></span>
                     <span id="processed-size" class="d-block"></span>
                     <span id="savings-percent" class="font-weight-bold d-block"></span>
@@ -108,7 +123,7 @@
                         <path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5z"/>
                         <path d="M7.646 11.854a.5.5 0 0 0 .708 0l3-3a.5.5 0 0 0-.708-.708L8.5 10.293V1.5a.5.5 0 0 0-1 0v8.793L5.354 8.146a.5.5 0 1 0-.708.708l3 3z"/>
                     </svg>
-                    Download Processed PDF
+                    Download Processed File
                 </a>
             </div>
         </div>
@@ -119,10 +134,10 @@
     </div>
 
     <footer class="footer mt-auto py-3 bg-light text-center">
-			<div class="container">
-					<span class="text-muted">v0.2 - Created by <a href="https://linjin.me" target="_blank">Jin</a>, using <a href="https://developers.googleblog.com/en/gemini-2-5-pro-io-improved-coding-performance/" target="_blank">Gemini 2.5 Pro Preview (I/O Edition)</a>.</span>
-			</div>
-		</footer>
+        <div class="container">
+            <span class="text-muted">v0.3 - Created by <a href="https://linjin.me" target="_blank">Jin</a>, using <a href="https://developers.googleblog.com/en/gemini-2-5-pro-io-improved-coding-performance/" target="_blank">Gemini 2.5 Pro Preview (I/O Edition)</a>.</span>
+        </div>
+    </footer>
 
     <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.5.3/dist/umd/popper.min.js"></script>
