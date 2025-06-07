@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 
+import sys # Ensure sys is imported
 import fitz  # PyMuPDF
 import os
+import math
 import uuid
 import threading
 import time
@@ -19,7 +21,19 @@ except ImportError:
     Image = None
     logging.warning("Pillow library not found. Combined image output target will not be available. Please install Pillow: pip install Pillow")
 
-app = Flask(__name__)
+# --- Path Configuration for PyInstaller ---
+def get_base_path():
+    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+        return sys._MEIPASS
+    else:
+        return os.path.dirname(os.path.abspath(__file__))
+
+BUNDLE_DIR = get_base_path()
+
+app = Flask(__name__,
+            template_folder=os.path.join(BUNDLE_DIR, 'templates'),
+            static_folder=os.path.join(BUNDLE_DIR, 'static')
+           )
 
 # --- Configuration ---
 UPLOAD_FOLDER = 'uploads'
@@ -108,6 +122,9 @@ def init_db():
     finally:
         if conn:
             conn.close()
+
+# Calculate half of the available CPU cores, rounded down
+# half_cpu_count = math.floor((os.cpu_count() or 2) / 2)
 
 MAX_PDF_WORKERS = int(os.environ.get("MAX_PDF_WORKERS", os.cpu_count() or 2))
 app.logger.info(f"Initializing PDF processor with {MAX_PDF_WORKERS} max workers.")
@@ -264,7 +281,7 @@ def process_pdf_task(task_id, input_pdf_path, output_file_path, dpi,
             # --- Post-page-loop processing ---
             if output_target_format == 'pdf':
                 update_task_in_db(task_id, progress=95, message="Finalizing: Compiling and saving your new PDF...")
-                output_doc_for_pdf.save(output_file_path, garbage=4, deflate=True, deflate_images=True, clean=True, linear=True)
+                output_doc_for_pdf.save(output_file_path, garbage=4, deflate=True, deflate_images=True, clean=True)
 
             elif output_target_format == 'image':
                 if not temp_image_files_for_stitching:
@@ -603,7 +620,7 @@ if __name__ == '__main__':
     app.logger.info("Cleanup thread started.")
 
     app.logger.info("Starting Flask development server...")
-    app.run(debug=True, host='0.0.0.0', port=7001, threaded=True) 
+    app.run(debug=False, host='0.0.0.0', port=7001, threaded=True) 
 else: 
     init_db()
     if Image is None and os.environ.get("WERKZEUG_RUN_MAIN") != "true": # Log once per gunicorn worker start typically

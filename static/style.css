@@ -43,3 +43,42 @@ body {
 	font-weight: bold;
 	text-shadow: 1px 1px 1px rgba(0,0,0,0.4);
 }
+
+/* Styles for drag and drop */
+.drop-zone-container {
+    border: 2px dashed #ccc;
+    border-radius: .25rem;
+    /* padding: 20px; This is provided by .card-body */
+    text-align: center; /* Center form groups and text like main label, hints, radio groups */
+    transition: border-color 0.2s ease-in-out, background-color 0.2s ease-in-out;
+    position: relative;
+}
+
+.drop-zone-container.drag-over {
+    border-color: #007bff;
+    background-color: #f8f9fa;
+}
+
+/* Ensure Bootstrap custom file input text is left-aligned within its centered block */
+.drop-zone-container .custom-file {
+    text-align: left;
+    /* If .custom-file needs to be constrained in width when centered: */
+    /* display: inline-block; */ /* Allows centering of the block itself */
+    /* max-width: 400px; */ /* Example width constraint */
+}
+
+/* Ensure advanced options card content is left-aligned if the card itself is centered */
+#advanced-options .card-body {
+    text-align: left;
+}
+
+
+/* Styling for file log items */
+#file-log-list .list-group-item {
+    word-break: break-word;
+}
+
+#file-log-list .file-item-progress-bar {
+    height: 10px;
+    font-size: 0.7rem;
+}
