@@ -165,4 +165,4 @@ cloudflare_command.txt
 tasks.db
 .DS_Store
 .python-version
-.DS_Store
+gunicorn.log
