@@ -1,23 +1,30 @@
 #!/bin/bash
 #
-# setup.sh (Fully Automated Version): Installs Homebrew, Python build
+# setup.sh (Fully Automated & Robust Version): Installs Homebrew, Python build
 # dependencies, pyenv, and the pyenv-virtualenv plugin.
+# This version works correctly when run from the command line OR by double-clicking.
 
 # Stop the script if any command fails
 set -e
 
 # --- Configuration ---
+# Get the absolute path of the directory where this script is located. This makes
+# the script robust and runnable from anywhere, including by double-clicking.
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+
 # Set the desired Python major/minor version. The script will find the latest patch.
-PYTHON_VERSION="3.11"
-# Name for the virtual environment. We'll use the project's directory name.
-VENV_NAME=$(basename "$PWD")
-REQUIREMENTS_FILE="requirements.txt"
+PYTHON_VERSION="3.12"
+# Name the virtual environment after the script's parent directory.
+VENV_NAME=$(basename "$SCRIPT_DIR")
+# Use the full path for the requirements file for robustness.
+REQUIREMENTS_FILE="$SCRIPT_DIR/requirements.txt"
+PYENV_ROOT="$HOME/.pyenv"
 
 # This variable will be updated with the full version string (e.g., 3.11.7)
 LATEST_PYTHON_VERSION=""
-PYENV_ROOT="$HOME/.pyenv"
 
 # --- Helper Functions ---
+# Detects the user's shell profile file (.zshrc, .bash_profile, etc.)
 get_shell_profile() {
     if [ -n "$ZSH_VERSION" ] || [ -n "$BASH" ] && [ "$(ps -p $$ -o comm=)" = "zsh" ]; then
         echo "$HOME/.zshrc"
@@ -34,19 +41,22 @@ get_shell_profile() {
 
 # --- Main Script ---
 echo "🚀 Starting fully automated project setup using pyenv-virtualenv..."
+echo "Project Directory: '$SCRIPT_DIR'"
 echo "Virtual environment will be named: '$VENV_NAME'"
 echo ""
 
 # 1. Check for and install Homebrew if on macOS
 if [[ "$(uname)" == "Darwin" ]]; then
-    # ... (This section is correct and unchanged)
     echo "--> Checking for Homebrew..."
     if ! command -v brew &> /dev/null; then
         echo "⚠️  Homebrew is not installed, but it is required to continue."
         read -p "Press ENTER to install Homebrew automatically, or Ctrl+C to exit."
         /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+        
+        echo "--> Adding Homebrew to your PATH for the current session..."
         if [ -x "/opt/homebrew/bin/brew" ]; then eval "$(/opt/homebrew/bin/brew shellenv)"; fi
         if [ -x "/usr/local/bin/brew" ]; then eval "$(/usr/local/bin/brew shellenv)"; fi
+        
         echo "✅ Homebrew installed and configured."
     else
         echo "✅ Homebrew found."
@@ -69,7 +79,7 @@ if [[ "$(uname)" == "Darwin" ]]; then
     echo "✅ Build dependencies are up to date."
 fi
 
-# Initialize pyenv for the current session to make sub-commands available
+# Initialize pyenv for the current session to make its sub-commands available
 export PATH="$PYENV_ROOT/bin:$PATH"
 eval "$(pyenv init --path)"
 
@@ -122,7 +132,6 @@ echo "✅ Python $LATEST_PYTHON_VERSION is available."
 
 # 7. Create the virtual environment
 echo "--> Checking for virtual environment '$VENV_NAME'..."
-# The environments are stored inside the pyenv versions directory
 if [ ! -d "$PYENV_ROOT/versions/$VENV_NAME" ]; then
     echo "Creating virtual environment '$VENV_NAME' with Python $LATEST_PYTHON_VERSION..."
     pyenv virtualenv "$LATEST_PYTHON_VERSION" "$VENV_NAME"
@@ -145,9 +154,6 @@ fi
 echo "✅ $REQUIREMENTS_FILE found."
 
 echo "--> Installing dependencies into '$VENV_NAME'..."
-# Get the python executable from the now-active venv
-# Note: After `pyenv local`, the `python` command *should* point to the venv,
-# but being explicit is safer in scripts.
 VENV_PYTHON="$PYENV_ROOT/versions/$VENV_NAME/bin/python"
 "$VENV_PYTHON" -m pip install --upgrade pip
 "$VENV_PYTHON" -m pip install -r "$REQUIREMENTS_FILE"
@@ -157,14 +163,9 @@ echo "✅ Dependencies installed successfully."
 echo ""
 echo "🎉 Setup complete! 🎉"
 echo ""
-echo "Thanks to pyenv-virtualenv, your environment '$VENV_NAME' will activate"
-echo "automatically whenever you enter this directory."
-echo ""
-echo "To see this in action, you may need to leave and re-enter the directory:"
-echo "   cd .. && cd $(basename "$PWD")"
+echo "Thanks to pyenv-virtualenv, the '$VENV_NAME' environment will activate"
+echo "automatically whenever you enter this directory in a new terminal."
 echo ""
 echo "You can now run the application directly:"
 echo "   ./run.sh"
-echo ""
-echo "To manually deactivate, run: pyenv deactivate"
 echo ""

@@ -1,28 +1,27 @@
 #!/bin/bash
 #
 # run.sh: Starts the Gunicorn server, automatically using the
-# virtual environment created by the setup script.
+# virtual environment. Works when run from terminal or double-clicked.
 
-# --- Configuration ---
+# --- Configuration & Environment Setup ---
+# Get the absolute path of the directory where this script is located.
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+
+# Set all paths relative to the script's location for robustness.
+VENV_NAME=$(basename "$SCRIPT_DIR")
+VENV_PATH="$HOME/.pyenv/versions/$VENV_NAME"
+GUNICORN_CMD="$VENV_PATH/bin/gunicorn"
+
 PORT=7001
 HOST="0.0.0.0"
 APP_MODULE="app:app"
 TIMEOUT=1200
-LOG_FILE="gunicorn.log"
+LOG_FILE="$SCRIPT_DIR/gunicorn.log"
 
-# --- Virtual Environment Configuration ---
-# Determine the virtual environment name from the current directory name.
-VENV_NAME=$(basename "$PWD")
-# Path to virtualenvs managed by pyenv-virtualenv
-VENV_PATH="$HOME/.pyenv/versions/$VENV_NAME"
-# Define the full path to the gunicorn command inside the virtual environment.
-GUNICORN_CMD="$VENV_PATH/bin/gunicorn"
-
-# ... (The rest of the script is unchanged and will work perfectly)
 PIPELINE_PID=""
 
+# --- Shutdown Function ---
 shutdown_server() {
-    # ...
     echo ""
     echo "🛑 Initiating shutdown..."
     if [ -n "$PIPELINE_PID" ] && ps -p "$PIPELINE_PID" > /dev/null; then
@@ -36,10 +35,13 @@ shutdown_server() {
     exit 0
 }
 
+# --- Trap Signals ---
 trap 'shutdown_server' SIGINT SIGTERM
 
-echo "--> Verifying environment..."
+# --- Main Script ---
 
+# --- Pre-flight Checks ---
+echo "--> Verifying environment..."
 if [ ! -d "$VENV_PATH" ]; then
     echo "❌ Error: Virtual environment '$VENV_NAME' not found."
     echo "   The expected path was '$VENV_PATH'."
@@ -52,20 +54,21 @@ if [ ! -x "$GUNICORN_CMD" ]; then
     echo "   Please run './setup.sh' again to install dependencies."
     exit 1
 fi
-
 echo "✅ Environment checks passed. Using gunicorn from '$VENV_NAME'."
 echo ""
 
+# --- Execution ---
 echo "📝 Clearing previous log file: $LOG_FILE"
 > "$LOG_FILE"
 
-echo "🚀 Starting Gunicorn server..."
+echo "🚀 Starting Gunicorn server from directory: $SCRIPT_DIR"
 echo "   Logs will be streamed here and also saved to '$LOG_FILE'."
 
-"$GUNICORN_CMD" --timeout "$TIMEOUT" --bind "$HOST:$PORT" "$APP_MODULE" 2>&1 | tee "$LOG_FILE" &
+# Use --chdir to ensure Gunicorn runs in the correct project directory,
+# which is essential when the script is double-clicked.
+"$GUNICORN_CMD" --chdir "$SCRIPT_DIR" --timeout "$TIMEOUT" --bind "$HOST:$PORT" "$APP_MODULE" 2>&1 | tee "$LOG_FILE" &
 
 PIPELINE_PID=$!
-
 sleep 1
 
 if ! ps -p "$PIPELINE_PID" > /dev/null; then
@@ -83,7 +86,6 @@ done
 
 echo ""
 echo "🌍 Server is ready! Launching browser at http://localhost:$PORT"
-
 open "http://localhost:$PORT"
 
 echo ""
