@@ -43,7 +43,7 @@ DATABASE_FILE = 'tasks.db' # SQLite database file
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['PROCESSED_FOLDER'] = PROCESSED_FOLDER
-app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100 MB limit
+app.config['MAX_CONTENT_LENGTH'] = 250 * 1024 * 1024  # 200 MB limit
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(threadName)s - %(message)s')
