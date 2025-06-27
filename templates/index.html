@@ -12,7 +12,7 @@
         <a class="navbar-brand" href="#">PixelPress PDF Compressor</a>
     </nav>
 
-    <div class="container mt-3 mb-4">
+    <div class="container mb-4">
         <div class="jumbotron bg-light py-3 px-4 rounded mb-4">
             <h1 class="h4">Compress or Combine Figma PDFs</h1>
             <p class="mb-0" style="font-size: 0.95rem;">Upload PDFs (up to 100MB each) to convert pages into images within a new PDF (often smaller), or combine all pages into a single image.</p>
@@ -92,6 +92,10 @@
                 </form>
             </div>
         </div>
+        
+        <div id="global-error-area" class="alert alert-danger mt-4" style="display: none;">
+            <strong>Error:</strong> <span id="global-error-message"></span>
+        </div>
 
         <div id="file-processing-log-area" class="card shadow-sm mb-4" style="display: none;">
             <div class="card-header d-flex justify-content-between align-items-center">
@@ -104,10 +108,6 @@
                 </ul>
                 <p id="no-files-message" class="text-muted text-center p-3">No files processed or in queue yet. Add some files above.</p>
             </div>
-        </div>
-        
-        <div id="global-error-area" class="alert alert-danger mt-4" style="display: none;">
-            <strong>Error:</strong> <span id="global-error-message"></span>
         </div>
     </div>
 
