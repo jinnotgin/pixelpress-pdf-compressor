@@ -95,7 +95,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 console.error("Server has become unreachable. Pausing operations.", error.message);
                 isServerReachable = false;
                 addFilesBtn.disabled = true;
-                showGlobalError("Cannot connect to the server. Retrying automatically...");
+                showGlobalError("Oops! Lost connection – we’ll resume once the connection is back.");
 
                 if (currentPollIntervalId) {
                     clearInterval(currentPollIntervalId);
