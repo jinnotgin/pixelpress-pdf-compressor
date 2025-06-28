@@ -116,7 +116,6 @@ document.addEventListener('DOMContentLoaded', function () {
             if (item && ['uploading', 'processing'].includes(item.status)) {
                 updateItemState(item, { message: "Connection lost. Waiting to reconnect..." });
             }
-            isCurrentlyProcessingQueueItem = false;
             await checkServerHealth();
         } else {
             if (item) {
