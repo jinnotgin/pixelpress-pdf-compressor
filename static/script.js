@@ -6,6 +6,8 @@ document.addEventListener('DOMContentLoaded', function () {
     const fileInput = document.getElementById('pdf-file-input');
     const addFilesBtn = document.getElementById('add-files-btn');
     const contentTitle = document.getElementById('content-title');
+    const globalErrorBanner = document.getElementById('global-error-banner');
+    const globalErrorMessage = document.getElementById('global-error-message');
 
     const settingsPanel = document.getElementById('settings-panel');
     const settingsPanelHeader = document.querySelector('.settings-panel-header');
@@ -23,15 +25,15 @@ document.addEventListener('DOMContentLoaded', function () {
     let fileItems = [];
     let isCurrentlyProcessingQueueItem = false;
     let currentPollIntervalId = null;
-    const FRONTEND_HISTORY_LIFESPAN_HOURS = 71; // 1 hour less than server for safety
+    let isServerReachable = true;
+    let healthCheckIntervalId = null;
+    const FRONTEND_HISTORY_LIFESPAN_HOURS = 71;
 
     // --- Initialization ---
     function initializeApp() {
-        // Event Listeners for adding files
         addFilesBtn.addEventListener('click', () => fileInput.click());
         fileInput.addEventListener('change', (e) => handleFiles(e.target.files));
 
-        // Drag and Drop Listeners
         ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
             document.body.addEventListener(eventName, preventDefaults, false);
             dropZone.addEventListener(eventName, preventDefaults, false);
@@ -40,35 +42,95 @@ document.addEventListener('DOMContentLoaded', function () {
         ['dragleave', 'drop'].forEach(eventName => dropZone.addEventListener(eventName, () => dropZone.classList.remove('drag-over'), false));
         dropZone.addEventListener('drop', handleDrop, false);
 
-        // Action Listeners
         clearLogBtn.addEventListener('click', clearFinishedItems);
         fileListContainer.addEventListener('click', handleFileItemActions);
 
-        // Mobile Settings Collapse Listener
         settingsPanelHeader.addEventListener('click', () => {
-            if (window.innerWidth <= 768) {
-                settingsPanel.classList.toggle('is-collapsed');
-            }
+            if (window.innerWidth <= 768) settingsPanel.classList.toggle('is-collapsed');
         });
 
-        // Form Input UI Listeners
         dpiInput.addEventListener('input', () => dpiValueDisplay.textContent = `${dpiInput.value} DPI`);
         jpegQualityInput.addEventListener('input', () => jpegQualityValueDisplay.textContent = `${jpegQualityInput.value}%`);
         imageFormatRadios.forEach(radio => radio.addEventListener('change', toggleJpegQualityInput));
         toggleJpegQualityInput();
 
-        // Load State and Start Processing
         loadState();
         pruneOldFinishedItems();
-        if (window.innerWidth <= 768) settingsPanel.classList.remove('is-collapsed');
-        else settingsPanel.classList.add('is-collapsed');
+        if (window.innerWidth <= 768 && !settingsPanel.classList.contains('is-collapsed')) {
+            settingsPanel.classList.add('is-collapsed');
+        }
         renderFileList();
-        processFileQueue();
+        
+        checkServerHealth().then(() => {
+            if (isServerReachable) {
+                processFileQueue();
+            }
+        });
+    }
+    
+    // --- Server Health & Error Handling (Restored) ---
+
+    async function checkServerHealth() {
+        try {
+            const response = await fetch('/health', { cache: 'no-store' });
+            if (!response.ok) throw new Error(`Server responded with status ${response.status}`);
+            
+            if (!isServerReachable) {
+                console.log("Server is reachable again. Restoring operations.");
+                isServerReachable = true;
+                if (healthCheckIntervalId) {
+                    clearInterval(healthCheckIntervalId);
+                    healthCheckIntervalId = null;
+                }
+                globalErrorBanner.style.display = 'none';
+                addFilesBtn.disabled = false;
+                processFileQueue();
+            }
+        } catch (error) {
+            if (isServerReachable) {
+                console.error("Server has become unreachable. Pausing operations.", error.message);
+                isServerReachable = false;
+                addFilesBtn.disabled = true;
+                showGlobalError("Cannot connect to the server. Retrying automatically...");
+
+                if (currentPollIntervalId) {
+                    clearInterval(currentPollIntervalId);
+                    currentPollIntervalId = null;
+                }
+                isCurrentlyProcessingQueueItem = false;
+
+                if (!healthCheckIntervalId) {
+                    healthCheckIntervalId = setInterval(checkServerHealth, 5000);
+                }
+            }
+        }
+    }
+
+    async function handleFetchError(error, item) {
+        if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
+            console.warn("Fetch failed, triggering a server health check.");
+            if (item && ['uploading', 'processing'].includes(item.status)) {
+                updateItemState(item, { message: "Connection lost. Waiting to reconnect..." });
+            }
+            isCurrentlyProcessingQueueItem = false;
+            await checkServerHealth();
+        } else {
+            if (item) {
+                updateItemState(item, { status: 'failed', error: error.message, message: 'An unexpected error occurred' });
+            }
+            isCurrentlyProcessingQueueItem = false;
+            processFileQueue();
+        }
     }
 
     // --- Core File Handling and Processing ---
 
     function handleFiles(files) {
+        if (!isServerReachable) {
+            showToast("Cannot add files while server is unreachable.");
+            return;
+        }
+
         fileInput.value = '';
         if (!files || files.length === 0) return;
 
@@ -117,7 +179,7 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     async function processFileQueue() {
-        if (isCurrentlyProcessingQueueItem) return;
+        if (isCurrentlyProcessingQueueItem || !isServerReachable) return;
 
         const itemToReconnect = fileItems.find(item => item.status === 'processing' && item.taskId && !item.reconnected);
         if (itemToReconnect) {
@@ -157,9 +219,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 throw new Error(data.error || 'Failed to start processing task.');
             }
         } catch (err) {
-            updateItemState(currentItem, { status: 'failed', error: err.message, message: 'Upload failed' });
-            isCurrentlyProcessingQueueItem = false;
-            processFileQueue();
+            await handleFetchError(err, currentItem);
         }
     }
 
@@ -167,8 +227,13 @@ document.addEventListener('DOMContentLoaded', function () {
         if (currentPollIntervalId) clearInterval(currentPollIntervalId);
 
         currentPollIntervalId = setInterval(async () => {
+            if (!isServerReachable) {
+                console.log("Polling paused, server is unreachable.");
+                return;
+            }
+
             const currentItemInPoll = fileItems.find(fi => fi.id === item.id);
-            if (!currentItemInPoll || !currentItemInPoll.taskId || ['completed', 'failed'].includes(currentItemInPoll.status)) {
+            if (!currentItemInPoll || !currentItemInPoll.taskId || ['completed', 'failed', 'cancelling'].includes(currentItemInPoll.status)) {
                 clearInterval(currentPollIntervalId);
                 isCurrentlyProcessingQueueItem = false;
                 processFileQueue();
@@ -177,7 +242,10 @@ document.addEventListener('DOMContentLoaded', function () {
 
             try {
                 const response = await fetch(`/status/${currentItemInPoll.taskId}`, { cache: 'no-store' });
-                if (!response.ok) throw new Error(`Server returned status ${response.status}`);
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({}));
+                    throw new Error(errorData.message || errorData.error || `Server returned status ${response.status}`);
+                }
 
                 const data = await response.json();
                 const updates = {
@@ -186,23 +254,23 @@ document.addEventListener('DOMContentLoaded', function () {
                     status: data.status
                 };
 
-                if (data.status === 'completed') {
+                if (data.status === 'completed' || data.status === 'failed') {
                     clearInterval(currentPollIntervalId);
-                    updates.downloadUrl = `/download/${currentItemInPoll.taskId}`;
-                    updates.userFacingOutputFilename = data.output_filename;
-                    updates.originalSizeBytes = data.original_size_bytes;
-                    updates.processedSizeBytes = data.processed_size_bytes;
                     isCurrentlyProcessingQueueItem = false;
-                    processFileQueue();
-                } else if (data.status === 'failed') {
-                    clearInterval(currentPollIntervalId);
-                    updates.error = data.message || 'Processing failed on server.';
-                    isCurrentlyProcessingQueueItem = false;
+                    if (data.status === 'completed') {
+                        updates.downloadUrl = `/download/${currentItemInPoll.taskId}`;
+                        updates.userFacingOutputFilename = data.output_filename;
+                        updates.originalSizeBytes = data.original_size_bytes;
+                        updates.processedSizeBytes = data.processed_size_bytes;
+                    } else {
+                        updates.error = data.message || 'Processing failed on server.';
+                    }
                     processFileQueue();
                 }
                 updateItemState(currentItemInPoll, updates);
             } catch (err) {
-                console.error("Polling failed:", err.message);
+                clearInterval(currentPollIntervalId);
+                await handleFetchError(err, currentItemInPoll);
             }
         }, 2000);
     }
@@ -240,7 +308,6 @@ document.addEventListener('DOMContentLoaded', function () {
                 const savingsText = savings > 0 ? `<span class="size-reduction">(${((savings / item.originalSizeBytes) * 100).toFixed(0)}% smaller)</span>` : '';
                 sizeInfo = `From ${formatBytes(item.originalSizeBytes)} → ${formatBytes(item.processedSizeBytes)} ${savingsText}`;
             }
-            // MODIFIED: Removed truncateFilename, added title attribute for hover
             el.innerHTML = `
                 <a href="${item.downloadUrl}" download="${item.userFacingOutputFilename}" class="button-download-primary">
                     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clip-rule="evenodd" /></svg>
@@ -262,56 +329,40 @@ document.addEventListener('DOMContentLoaded', function () {
         el.classList.remove('is-completed');
         el.innerHTML = `
             <div class="file-item-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M4,2H16L20,6V20A2,2 0 0,1 18,22H4A2,2 0 0,1 2,20V4A2,2 0 0,1 4,2M15,7H19.5L14,2.5V7A1,1 0 0,0 15,7Z" /></svg></div>
-            <div class="file-item-details"><div class="file-name"></div><div class="file-message"></div><div class="progress-bar"><div class="progress-bar-inner"></div></div></div>
+            <div class="file-item-details"><div class="file-name" title="${item.originalFilename}">${item.originalFilename}</div><div class="file-message"></div><div class="progress-bar"><div class="progress-bar-inner"></div></div></div>
             <div class="file-item-actions"></div>`;
 
-        // MODIFIED: Removed truncateFilename, added title attribute for hover
-        const fileNameEl = el.querySelector('.file-name');
-        fileNameEl.textContent = item.originalFilename;
-        fileNameEl.title = item.originalFilename;
-
-        const messageEl = el.querySelector('.file-message');
-        const actionsEl = el.querySelector('.file-item-actions');
-        const progressEl = el.querySelector('.progress-bar');
-        const progressInnerEl = el.querySelector('.progress-bar-inner');
-
-        messageEl.classList.remove('error');
+        el.querySelector('.file-message').classList.remove('error');
         if (item.status === 'failed' && item.error) {
-            messageEl.textContent = `Error: ${item.error}`;
-            messageEl.classList.add('error');
+            el.querySelector('.file-message').textContent = `Error: ${item.error}`;
+            el.querySelector('.file-message').classList.add('error');
         } else {
-            messageEl.textContent = item.message || '';
+            el.querySelector('.file-message').textContent = item.message || '';
         }
         if (['uploading', 'processing'].includes(item.status)) {
-            progressEl.style.display = 'block';
-            progressInnerEl.style.width = `${item.progress}%`;
+            el.querySelector('.progress-bar').style.display = 'block';
+            el.querySelector('.progress-bar-inner').style.width = `${item.progress}%`;
         } else {
-            progressEl.style.display = 'none';
+            el.querySelector('.progress-bar').style.display = 'none';
         }
         let statusBadge = '';
         switch (item.status) {
             case 'pending': statusBadge = `<span class="status-badge pending">Pending</span>`; break;
             case 'uploading': case 'processing': statusBadge = `<span class="status-badge processing">${item.status}</span>`; break;
             case 'failed': statusBadge = `<span class="status-badge failed">Failed</span>`; break;
+            case 'cancelling': statusBadge = `<span class="status-badge warning">Cancelling</span>`; break;
         }
-        actionsEl.innerHTML = statusBadge + `<button class="button-icon remove-file-item-btn" title="Remove Item"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" viewBox="0 0 16 16"><path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z"/></svg></button>`;
+        el.querySelector('.file-item-actions').innerHTML = statusBadge + `<button class="button-icon remove-file-item-btn" title="Remove Item"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" viewBox="0 0 16 16"><path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z"/></svg></button>`;
     }
 
     function updateAppUI() {
         const activeItem = fileItems.find(item => ['uploading', 'processing'].includes(item.status));
-
-        // MODIFIED: Changed header logic to be more informative
         if (activeItem) {
             const finishedCount = fileItems.filter(item => ['completed', 'failed'].includes(item.status)).length;
-            const totalCount = fileItems.length;
-            contentTitle.textContent = `Processing file ${finishedCount + 1} of ${totalCount}`;
+            contentTitle.textContent = `Processing file ${finishedCount + 1} of ${fileItems.length}`;
         } else if (fileItems.length > 0) {
             const pendingCount = fileItems.filter(item => item.status === 'pending').length;
-            if (pendingCount > 0) {
-                contentTitle.textContent = `${pendingCount} item${pendingCount > 1 ? 's' : ''} in queue`;
-            } else {
-                contentTitle.textContent = 'All tasks complete';
-            }
+            contentTitle.textContent = pendingCount > 0 ? `${pendingCount} item${pendingCount > 1 ? 's' : ''} in queue` : 'All tasks complete';
         } else {
             contentTitle.textContent = 'Ready for your PDFs';
         }
@@ -321,7 +372,10 @@ document.addEventListener('DOMContentLoaded', function () {
     function updateItemState(item, updates) {
         Object.assign(item, updates, { timestamp: Date.now() });
         saveState();
-        renderFileList();
+        const itemEl = fileListContainer.querySelector(`.file-item[data-id="${item.id}"]`);
+        if (itemEl) updateFileItemElement(itemEl, item);
+        else renderFileList();
+        updateAppUI();
     }
 
     // --- State Persistence & Helpers ---
@@ -330,10 +384,20 @@ document.addEventListener('DOMContentLoaded', function () {
         const itemIndex = fileItems.findIndex(item => item.id === itemId);
         if (itemIndex === -1) return;
         const itemToRemove = fileItems[itemIndex];
-        if (itemToRemove.taskId && ['uploading', 'processing'].includes(itemToRemove.status)) {
-            try { await fetch(`/task/${itemToRemove.taskId}`, { method: 'DELETE', cache: 'no-store' }); } catch (err) { showToast(`Could not remove task on server: ${err.message}`); }
+        
+        if (['uploading', 'processing'].includes(itemToRemove.status)) {
+            if (!confirm("This will cancel the active process. Are you sure?")) return;
         }
-        if (itemToRemove.id === fileItems.find(i => ['uploading', 'processing'].includes(i.status))?.id) {
+
+        if (itemToRemove.taskId && isServerReachable) {
+            try {
+                updateItemState(itemToRemove, { status: 'cancelling', message: 'Requesting cancellation...' });
+                await fetch(`/task/${itemToRemove.taskId}`, { method: 'DELETE', cache: 'no-store' });
+            } catch (err) {
+                showToast(`Could not remove task on server: ${err.message}`);
+            }
+        }
+        if (itemToRemove.id === fileItems.find(i => ['uploading', 'processing', 'cancelling'].includes(i.status))?.id) {
             clearInterval(currentPollIntervalId);
             currentPollIntervalId = null;
             isCurrentlyProcessingQueueItem = false;
@@ -348,8 +412,10 @@ document.addEventListener('DOMContentLoaded', function () {
         const confirmMessage = "This will permanently delete all completed and failed files from the server and clear them from this list. Continue?";
         if (!confirm(confirmMessage)) return;
         const itemsToDelete = fileItems.filter(item => (item.status === 'completed' || item.status === 'failed') && item.taskId);
-        const deletionPromises = itemsToDelete.map(item => fetch(`/task/${item.taskId}`, { method: 'DELETE', cache: 'no-store' }).catch(err => console.error(`Failed to delete task ${item.taskId} on server:`, err)));
-        if (deletionPromises.length > 0) await Promise.allSettled(deletionPromises);
+        if (itemsToDelete.length > 0 && isServerReachable) {
+            const deletionPromises = itemsToDelete.map(item => fetch(`/task/${item.taskId}`, { method: 'DELETE', cache: 'no-store' }).catch(err => console.error(`Failed to delete task ${item.taskId} on server:`, err)));
+            await Promise.allSettled(deletionPromises);
+        }
         fileItems = fileItems.filter(item => item.status !== 'completed' && item.status !== 'failed');
         saveState();
         renderFileList();
@@ -362,7 +428,8 @@ document.addEventListener('DOMContentLoaded', function () {
                 fileItems = JSON.parse(storedState);
                 fileItems.forEach(item => {
                     if (['pending', 'uploading', 'processing', 'cancelling'].includes(item.status)) {
-                        if (item.taskId) { item.status = 'processing'; item.message = "Reconnecting..."; } else { item.status = 'failed'; item.message = "Process interrupted by page reload."; item.error = item.message; }
+                        if (item.taskId) { item.status = 'processing'; item.message = "Reconnecting..."; item.reconnected = false; } 
+                        else { item.status = 'failed'; item.message = "Process interrupted by page reload."; item.error = item.message; }
                     }
                 });
                 fileItems.sort((a, b) => b.timestamp - a.timestamp);
@@ -378,13 +445,15 @@ document.addEventListener('DOMContentLoaded', function () {
     function pruneOldFinishedItems() {
         const now = Date.now();
         const maxAge = FRONTEND_HISTORY_LIFESPAN_HOURS * 60 * 60 * 1000;
+        const prevLength = fileItems.length;
         fileItems = fileItems.filter(item => {
             if (['completed', 'failed'].includes(item.status)) return (now - (item.timestamp || 0)) < maxAge;
             return true;
         });
-        saveState();
+        if (fileItems.length < prevLength) saveState();
     }
 
+    function showGlobalError(message) { globalErrorMessage.textContent = message; globalErrorBanner.style.display = 'flex'; }
     function handleDrop(e) { handleFiles(e.dataTransfer.files); }
     function preventDefaults(e) { e.preventDefault(); e.stopPropagation(); }
     function toggleJpegQualityInput() { jpegQualityGroup.style.display = (document.querySelector('input[name="image_format"]:checked').value === 'jpeg') ? 'block' : 'none'; }

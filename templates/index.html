@@ -5,6 +5,11 @@
 		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 		<title>PixelPress | Figma PDF Compressor</title>
 		<link
+			rel="icon"
+			href="{{ url_for('static', filename='logo.svg') }}"
+			type="image/svg+xml"
+		/>
+		<link
 			rel="stylesheet"
 			href="{{ url_for('static', filename='style.css') }}"
 		/>
@@ -22,16 +27,11 @@
 				<div class="settings-panel-header">
 					<!-- NEW: Header for collapsing on mobile -->
 					<div class="settings-header">
-						<svg
+						<img
+							src="{{ url_for('static', filename='logo.svg') }}"
 							class="logo-icon"
-							xmlns="http://www.w3.org/2000/svg"
-							viewBox="0 0 24 24"
-							fill="currentColor"
-						>
-							<path
-								d="M14 2H6C4.9 2 4 2.9 4 4V20C4 21.1 4.9 22 6 22H18C19.1 22 20 21.1 20 20V8L14 2ZM10 19L6 15H9V10H11V15H14L10 19ZM13 9V3.5L18.5 9H13Z"
-							/>
-						</svg>
+							alt="PixelPress Logo"
+						/>
 						<h1 class="app-title">PixelPress</h1>
 					</div>
 					<div class="settings-toggle-icon">
@@ -151,10 +151,8 @@
 			<main class="content-panel">
 				<div class="content-header">
 					<h2 id="content-title">Uploads</h2>
-					<!-- UPDATED: ID for dynamic title -->
 					<div class="header-actions">
 						<button id="add-files-btn" class="button-primary">
-							<!-- NEW: Add PDF Files button -->
 							<svg
 								xmlns="http://www.w3.org/2000/svg"
 								width="16"
@@ -177,7 +175,6 @@
 							title="Clear Finished Items"
 							disabled
 						>
-							<!-- Starts disabled -->
 							<svg
 								xmlns="http://www.w3.org/2000/svg"
 								width="20"
@@ -195,6 +192,27 @@
 							</svg>
 						</button>
 					</div>
+				</div>
+
+				<!-- ADDED: Global Error Banner for persistent messages like server down -->
+				<div
+					id="global-error-banner"
+					class="error-banner"
+					style="display: none"
+				>
+					<svg
+						xmlns="http://www.w3.org/2000/svg"
+						width="20"
+						height="20"
+						fill="currentColor"
+						viewBox="0 0 16 16"
+						style="flex-shrink: 0"
+					>
+						<path
+							d="M8.982 1.566a1.13 1.13 0 0 0-1.96 0L.165 13.233c-.457.778.091 1.767.98 1.767h13.713c.889 0 1.438-.99.98-1.767L8.982 1.566zM8 5c.535 0 .954.462.9.995l-.35 3.507a.552.552 0 0 1-1.1 0L7.1 5.995A.905.905 0 0 1 8 5zm.002 6a1 1 0 1 1 0 2 1 1 0 0 1 0-2z"
+						/>
+					</svg>
+					<span id="global-error-message"></span>
 				</div>
 
 				<div class="drop-zone" id="drop-zone">
