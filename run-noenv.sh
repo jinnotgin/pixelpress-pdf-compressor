@@ -1,16 +1,32 @@
 #!/bin/bash
 
 # --- Configuration ---
+# Get the absolute path of the directory where this script is located.
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+
 PORT=7001
 HOST="0.0.0.0"
 APP_MODULE="app:app"
 TIMEOUT=1200
-LOG_FILE="gunicorn.log"
+LOG_FILE="$SCRIPT_DIR/gunicorn.log"
 
 # This will hold the Process ID (PID) of the background pipeline.
-# Note: In a pipeline, $! gives the PID of the *last* command (tee).
-# Killing tee will cause gunicorn to terminate gracefully.
 PIPELINE_PID=""
+
+# --- NEW: Gunicorn Worker Configuration (from run.sh) ---
+# This enables true parallel processing by using multiple worker processes,
+# getting around the limitations of Python's Global Interpreter Lock (GIL).
+
+# 1. Automatically detect CPU cores. Fallback to 2 if undetected.
+CPU_COUNT=$(python3 -c 'import os; print(os.cpu_count() or 2)')
+
+# 2. Set smart defaults for workers and threads.
+DEFAULT_WORKERS=$CPU_COUNT
+WORKERS=${GUNICORN_WORKERS:-$DEFAULT_WORKERS}
+THREADS=${GUNICORN_THREADS:-2}
+WORKER_CLASS="gthread"
+WORKER_MAX_REQUEST_BEFORE_TERMINATE=1
+
 
 # --- Shutdown Function ---
 shutdown_server() {
@@ -34,18 +50,42 @@ trap 'shutdown_server' SIGINT SIGTERM
 
 # --- Main Script ---
 
+# --- NEW: Pre-flight Checks ---
+echo "--> Verifying environment..."
+if ! command -v python3 &> /dev/null; then
+    echo "❌ Error: 'python3' is not in your PATH. It is required to detect CPU cores."
+    exit 1
+fi
+if ! command -v gunicorn &> /dev/null; then
+    echo "❌ Error: 'gunicorn' is not in your PATH."
+    echo "   Please install it first (e.g., 'pip install gunicorn')."
+    exit 1
+fi
+echo "✅ Environment checks passed."
+echo ""
+
 # Clear the log file from the previous run.
-# Use 'tee -a' below if you want to append to logs instead of overwriting.
 echo "📝 Clearing previous log file: $LOG_FILE"
 > "$LOG_FILE"
 
 echo "🚀 Starting Gunicorn server..."
+# --- MODIFIED: Added worker info to startup message ---
+echo "   Host: $HOST | Port: $PORT"
+echo "   Worker Processes: $WORKERS | Threads per Worker: $THREADS (Class: $WORKER_CLASS)"
 echo "   Logs will be streamed here and also saved to '$LOG_FILE'."
 
-# Start Gunicorn, redirect its stderr to stdout, and pipe everything to 'tee'.
-# 'tee' will print to the console AND write to the log file.
-# The '&' runs the entire pipeline in the background.
-gunicorn --timeout "$TIMEOUT" --bind "$HOST:$PORT" "$APP_MODULE" 2>&1 | tee "$LOG_FILE" &
+# --- MODIFIED: Gunicorn command now includes worker/thread configuration ---
+# Using 'gunicorn' directly, assuming it's in the system PATH.
+# Use --chdir to ensure Gunicorn runs in the correct project directory.
+gunicorn \
+    --workers "$WORKERS" \
+    --threads "$THREADS" \
+    --worker-class "$WORKER_CLASS" \
+    --max-requests "$WORKER_MAX_REQUEST_BEFORE_TERMINATE" \
+    --chdir "$SCRIPT_DIR" \
+    --timeout "$TIMEOUT" \
+    --bind "$HOST:$PORT" \
+    "$APP_MODULE" 2>&1 | tee "$LOG_FILE" &
 
 # Capture the PID of the last command in the pipeline (tee)
 PIPELINE_PID=$!
@@ -55,7 +95,7 @@ sleep 1
 
 # Check if the process is still running. If not, it likely failed to start.
 if ! ps -p "$PIPELINE_PID" > /dev/null; then
-    echo "❌ Gunicorn failed to start. Review the output above for details."
+    echo "❌ Gunicorn failed to start. Review '$LOG_FILE' for errors."
     exit 1
 fi
 
@@ -71,8 +111,12 @@ done
 echo "" # Newline after the dots
 echo "🌍 Server is ready! Launching browser at http://localhost:$PORT"
 
-# Open the URL in the default browser on macOS
-open "http://localhost:$PORT"
+# --- MODIFIED: Cross-platform browser opening ---
+if command -v open &> /dev/null; then
+  open "http://localhost:$PORT" # macOS
+elif command -v xdg-open &> /dev/null; then
+  xdg-open "http://localhost:$PORT" # Linux
+fi
 
 echo ""
 echo "✨ Server is running. Press Ctrl+C in this terminal to shut down."
