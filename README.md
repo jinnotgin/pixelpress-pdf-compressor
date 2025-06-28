@@ -2,6 +2,8 @@
 
 A web-based tool to compress large PDFs (especially from design tools like Figma) by rasterizing pages into images, or to combine all pages of a PDF into a single, large image.
 
+<kbd><img width="1306" alt="image" src="https://github.com/user-attachments/assets/c7f6ca67-02e1-4806-9e40-f02a794570f8" /></kbd>
+
 It features a multi-file upload queue, real-time progress tracking, and customizable output settings, all managed through a clean and simple web interface. The included setup scripts provide a fully automated environment configuration for macOS.
 
 ## Why PixelPress?
