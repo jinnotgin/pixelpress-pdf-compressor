@@ -25,8 +25,8 @@ DEFAULT_WORKERS=$CPU_COUNT
 WORKERS=${GUNICORN_WORKERS:-$DEFAULT_WORKERS}
 THREADS=${GUNICORN_THREADS:-2}
 WORKER_CLASS="gthread"
-WORKER_MAX_REQUEST_BEFORE_TERMINATE=50
-WORKER_MAX_REQUEST_JITTER=10
+# WORKER_MAX_REQUEST_BEFORE_TERMINATE=50
+# WORKER_MAX_REQUEST_JITTER=10
 
 
 # --- Shutdown Function ---
@@ -82,8 +82,8 @@ gunicorn \
     --workers "$WORKERS" \
     --threads "$THREADS" \
     --worker-class "$WORKER_CLASS" \
-    --max-requests "$WORKER_MAX_REQUEST_BEFORE_TERMINATE" \
-    --max-requests-jitter "$WORKER_MAX_REQUEST_JITTER" \
+    # --max-requests "$WORKER_MAX_REQUEST_BEFORE_TERMINATE" \
+    # --max-requests-jitter "$WORKER_MAX_REQUEST_JITTER" \
     --chdir "$SCRIPT_DIR" \
     --timeout "$TIMEOUT" \
     --bind "$HOST:$PORT" \
