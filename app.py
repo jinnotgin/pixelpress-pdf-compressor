@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import gc # For explicit garbage collection
 import sys # Ensure sys is imported
 import fitz  # PyMuPDF
 import os
@@ -427,8 +428,15 @@ def process_pdf_task(task_id, input_pdf_path, output_file_path, dpi,
             app.logger.error(f"Task {task_id} critical error: {e_main}", exc_info=True)
             return
         finally:
-            if input_doc: input_doc.close()
-            if output_doc_for_pdf: output_doc_for_pdf.close()
+            if input_doc:
+                input_doc.close()
+                del input_doc
+            if output_doc_for_pdf:
+                output_doc_for_pdf.close()
+                del output_doc_for_pdf
+            
+            # Final garbage collection call for the whole task
+            gc.collect()
 
     if os.path.exists(input_pdf_path): 
         try:
