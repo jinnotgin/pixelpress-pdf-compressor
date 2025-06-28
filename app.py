@@ -52,6 +52,17 @@ for handler in logging.getLogger().handlers:
     handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(threadName)s - %(message)s'))
 app.logger.setLevel(logging.INFO)
 
+# --- MODIFIED: Tiling Configuration via Environment Variable ---
+try:
+    TILE_SIZE_PX = int(os.environ.get("PDF_TILE_SIZE_PX", "9600"))
+    if TILE_SIZE_PX < 1024:
+        logging.warning(f"PDF_TILE_SIZE_PX is set to a low value ({TILE_SIZE_PX}). Clamping to minimum of 1024.")
+        TILE_SIZE_PX = 1024
+except (ValueError, TypeError):
+    logging.warning("Invalid value for PDF_TILE_SIZE_PX environment variable. Using default 9600.")
+    TILE_SIZE_PX = 9600
+logging.info(f"Using tile size of {TILE_SIZE_PX}px for PDF rasterization.")
+
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(PROCESSED_FOLDER, exist_ok=True)
@@ -230,8 +241,7 @@ def process_pdf_task(task_id, input_pdf_path, output_file_path, dpi,
     input_doc = None
     output_doc_for_pdf = None
 
-    # Configuration for memory-saving tiling
-    TILE_SIZE_PX = 9600  # Process in 9600x9600 pixel chunks
+    # --- REMOVED: Tiling configuration moved to module level ---
 
     with tempfile.TemporaryDirectory(prefix=f"pdftask_{task_id}_") as temp_processing_dir:
         app.logger.info(f"Task {task_id}: Using temporary directory {temp_processing_dir} for intermediate files.")
@@ -430,6 +440,11 @@ def process_pdf_task(task_id, input_pdf_path, output_file_path, dpi,
 @app.route('/')
 def index():
     return render_template('index.html')
+
+@app.route('/health')
+def health_check():
+    """A simple endpoint to confirm the server is running."""
+    return jsonify({'status': 'ok'}), 200
 
 @app.route('/upload', methods=['POST'])
 def upload_file():
