@@ -20,7 +20,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
     const clearLogBtn = document.getElementById('clear-log-btn');
     const toastContainer = document.getElementById('toast-container');
-    const resetSettingsBtn = document.getElementById('reset-settings-btn'); // ADDED
+    const resetSettingsBtn = document.getElementById('reset-settings-btn');
 
     // --- State Variables ---
     let fileItems = [];
@@ -45,7 +45,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
         clearLogBtn.addEventListener('click', clearFinishedItems);
         fileListContainer.addEventListener('click', handleFileItemActions);
-        resetSettingsBtn.addEventListener('click', resetSettingsToDefault); // ADDED
+        resetSettingsBtn.addEventListener('click', resetSettingsToDefault);
 
         settingsPanelHeader.addEventListener('click', () => {
             if (window.innerWidth <= 768) settingsPanel.classList.toggle('is-collapsed');
@@ -113,9 +113,20 @@ document.addEventListener('DOMContentLoaded', function () {
     async function handleFetchError(error, item) {
         if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
             console.warn("Fetch failed, triggering a server health check.");
+
+            // FIX: If this error happened to the actively polled item, stop the polling.
+            if (currentPollIntervalId) {
+                clearInterval(currentPollIntervalId);
+                currentPollIntervalId = null;
+            }
+            // FIX: Release the lock so the queue can re-evaluate on connection restoration.
+            isCurrentlyProcessingQueueItem = false;
+
             if (item && ['uploading', 'processing'].includes(item.status)) {
+                // Keep the 'processing' status but update the message to inform the user.
                 updateItemState(item, { message: "Connection lost. Waiting to reconnect..." });
             }
+            
             await checkServerHealth();
         } else {
             if (item) {
@@ -184,10 +195,12 @@ document.addEventListener('DOMContentLoaded', function () {
     async function processFileQueue() {
         if (isCurrentlyProcessingQueueItem || !isServerReachable) return;
 
-        const itemToReconnect = fileItems.find(item => item.status === 'processing' && item.taskId && !item.reconnected);
+        // FIX: Simplified, stateless reconnection logic. If a task is 'processing' but not
+        // being polled (because of a disconnect), this will find and resume it.
+        const itemToReconnect = fileItems.find(item => item.status === 'processing' && item.taskId);
         if (itemToReconnect) {
             isCurrentlyProcessingQueueItem = true;
-            itemToReconnect.reconnected = true;
+            updateItemState(itemToReconnect, { message: "Reconnecting..." });
             pollStatusForItem(itemToReconnect);
             return;
         }
@@ -232,6 +245,7 @@ document.addEventListener('DOMContentLoaded', function () {
         currentPollIntervalId = setInterval(async () => {
             if (!isServerReachable) {
                 console.log("Polling paused, server is unreachable.");
+                // Let handleFetchError manage the state change on the next failed fetch.
                 return;
             }
 
@@ -272,7 +286,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 }
                 updateItemState(currentItemInPoll, updates);
             } catch (err) {
-                clearInterval(currentPollIntervalId);
+                // Let handleFetchError stop the interval and manage state
                 await handleFetchError(err, currentItemInPoll);
             }
         }, 2000);
@@ -431,8 +445,16 @@ document.addEventListener('DOMContentLoaded', function () {
                 fileItems = JSON.parse(storedState);
                 fileItems.forEach(item => {
                     if (['pending', 'uploading', 'processing', 'cancelling'].includes(item.status)) {
-                        if (item.taskId) { item.status = 'processing'; item.message = "Reconnecting..."; item.reconnected = false; } 
-                        else { item.status = 'failed'; item.message = "Process interrupted by page reload."; item.error = item.message; }
+                        // FIX: If it has a task ID, it was interrupted mid-process. Mark for reconnection.
+                        // If no task ID, it failed before it even started processing.
+                        if (item.taskId) {
+                            item.status = 'processing';
+                            item.message = "Reconnecting...";
+                        } else {
+                            item.status = 'failed';
+                            item.message = "Process interrupted by page reload.";
+                            item.error = item.message;
+                        }
                     }
                 });
                 fileItems.sort((a, b) => b.timestamp - a.timestamp);
@@ -485,7 +507,6 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
-    // ADDED: Function to reset settings form to its default values
     function resetSettingsToDefault() {
         const defaults = {
             outputFormat: 'pdf',
