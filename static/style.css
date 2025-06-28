@@ -164,14 +164,59 @@ body {
 	border: 2px solid white;
 	box-shadow: var(--shadow);
 }
-.range-value {
-	display: block;
-	text-align: right;
-	font-size: 0.85rem;
-	color: var(--medium-text);
+/* REMOVED .range-value class */
+
+/* CORRECTED: Styles for combined range slider and number input */
+.range-input-wrapper {
+	display: flex;
+	align-items: center;
+	gap: 12px; /* Reduced gap for a tighter look */
 	margin-top: 4px;
-	font-weight: 500;
 }
+.range-input-wrapper .form-range {
+	width: auto;
+	flex-grow: 1;
+}
+.range-value-input-group {
+	display: flex;
+	align-items: center;
+	flex-shrink: 0;
+	border: 1px solid var(--border-color);
+	border-radius: 6px;
+	background-color: white;
+	transition: border-color 0.2s;
+}
+.range-value-input-group:focus-within {
+	border-color: var(--primary-color);
+	box-shadow: 0 0 0 2px var(--primary-color-light);
+}
+.range-number-input {
+	width: 48px; /* Fine-tuned width */
+	border: none;
+	outline: none;
+	padding: 6px 0 6px 6px; /* Adjusted padding, especially left */
+	text-align: center; /* Centered text is better for varying digit counts */
+	font-family: var(--font-family);
+	font-size: 0.9rem;
+	font-weight: 500;
+	color: var(--dark-text);
+	background-color: transparent;
+}
+.range-number-input::-webkit-outer-spin-button,
+.range-number-input::-webkit-inner-spin-button {
+	-webkit-appearance: none;
+	margin: 0;
+}
+.range-number-input[type="number"] {
+	-moz-appearance: textfield;
+}
+.range-value-input-group span {
+	font-size: 0.9rem;
+	font-weight: 500;
+	color: var(--medium-text);
+	padding: 0 10px 0 2px; /* Adjusted padding to bring unit closer */
+}
+
 .segmented-control {
 	display: flex;
 	width: 100%;

@@ -12,9 +12,9 @@ document.addEventListener('DOMContentLoaded', function () {
     const settingsPanel = document.getElementById('settings-panel');
     const settingsPanelHeader = document.querySelector('.settings-panel-header');
     const dpiInput = document.getElementById('dpi');
-    const dpiValueDisplay = document.getElementById('dpi-value');
+    const dpiNumberInput = document.getElementById('dpi-number-input'); // New
     const jpegQualityInput = document.getElementById('jpeg_quality');
-    const jpegQualityValueDisplay = document.getElementById('jpeg-quality-value');
+    const jpegQualityNumberInput = document.getElementById('jpeg-quality-number-input'); // New
     const jpegQualityGroup = document.getElementById('jpeg-quality-group');
     const imageFormatRadios = document.querySelectorAll('input[name="image_format"]');
 
@@ -49,8 +49,10 @@ document.addEventListener('DOMContentLoaded', function () {
             if (window.innerWidth <= 768) settingsPanel.classList.toggle('is-collapsed');
         });
 
-        dpiInput.addEventListener('input', () => dpiValueDisplay.textContent = `${dpiInput.value} DPI`);
-        jpegQualityInput.addEventListener('input', () => jpegQualityValueDisplay.textContent = `${jpegQualityInput.value}%`);
+        // Setup two-way data binding for range sliders and number inputs
+        setupRangeInputSync(dpiInput, dpiNumberInput);
+        setupRangeInputSync(jpegQualityInput, jpegQualityNumberInput);
+        
         imageFormatRadios.forEach(radio => radio.addEventListener('change', toggleJpegQualityInput));
         toggleJpegQualityInput();
 
@@ -68,7 +70,7 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
     
-    // --- Server Health & Error Handling (Restored) ---
+    // --- Server Health & Error Handling ---
 
     async function checkServerHealth() {
         try {
@@ -451,6 +453,35 @@ document.addEventListener('DOMContentLoaded', function () {
             return true;
         });
         if (fileItems.length < prevLength) saveState();
+    }
+
+    // --- UI & Event Helpers ---
+    function setupRangeInputSync(rangeEl, numberEl) {
+        const min = parseInt(rangeEl.min, 10);
+        const max = parseInt(rangeEl.max, 10);
+        // Update number input when slider moves
+        rangeEl.addEventListener('input', () => {
+            numberEl.value = rangeEl.value;
+        });
+        // Update slider when number input changes
+        numberEl.addEventListener('input', () => {
+            const value = parseInt(numberEl.value, 10);
+            if (!isNaN(value) && value >= min && value <= max) {
+                rangeEl.value = value;
+            }
+        });
+        // Validate and clamp on leaving the input field
+        numberEl.addEventListener('change', () => {
+            let value = parseInt(numberEl.value, 10);
+            if (isNaN(value) || value < min) {
+                value = min;
+            } else if (value > max) {
+                value = max;
+            }
+            // Update both the number input (in case it was clamped) and the slider
+            numberEl.value = value;
+            rangeEl.value = value;
+        });
     }
 
     function showGlobalError(message) { globalErrorMessage.textContent = message; globalErrorBanner.style.display = 'flex'; }

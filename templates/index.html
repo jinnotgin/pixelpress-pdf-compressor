@@ -83,17 +83,30 @@
 								<label for="dpi" class="form-label-small"
 									>Resolution (DPI)</label
 								>
-								<input
-									type="range"
-									class="form-range"
-									id="dpi"
-									name="dpi"
-									value="72"
-									min="10"
-									max="300"
-									step="1"
-								/>
-								<span class="range-value" id="dpi-value">72 DPI</span>
+								<!-- UPDATED: DPI input group -->
+								<div class="range-input-wrapper">
+									<input
+										type="range"
+										class="form-range"
+										id="dpi"
+										name="dpi"
+										value="72"
+										min="10"
+										max="300"
+										step="1"
+									/>
+									<div class="range-value-input-group">
+										<input
+											type="number"
+											id="dpi-number-input"
+											class="range-number-input"
+											value="72"
+											min="10"
+											max="300"
+										/>
+										<span>DPI</span>
+									</div>
+								</div>
 							</div>
 							<div class="sub-group">
 								<label for="image_format" class="form-label-small"
@@ -121,17 +134,30 @@
 								<label for="jpeg_quality" class="form-label-small"
 									>JPEG Quality</label
 								>
-								<input
-									type="range"
-									class="form-range"
-									id="jpeg_quality"
-									name="jpeg_quality"
-									value="75"
-									min="1"
-									max="100"
-									step="1"
-								/>
-								<span class="range-value" id="jpeg-quality-value">75%</span>
+								<!-- UPDATED: JPEG Quality input group -->
+								<div class="range-input-wrapper">
+									<input
+										type="range"
+										class="form-range"
+										id="jpeg_quality"
+										name="jpeg_quality"
+										value="75"
+										min="1"
+										max="100"
+										step="1"
+									/>
+									<div class="range-value-input-group">
+										<input
+											type="number"
+											id="jpeg-quality-number-input"
+											class="range-number-input"
+											value="75"
+											min="1"
+											max="100"
+										/>
+										<span>%</span>
+									</div>
+								</div>
 							</div>
 						</div>
 					</form>
