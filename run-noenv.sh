@@ -82,12 +82,13 @@ gunicorn \
     --workers "$WORKERS" \
     --threads "$THREADS" \
     --worker-class "$WORKER_CLASS" \
-    # --max-requests "$WORKER_MAX_REQUEST_BEFORE_TERMINATE" \
-    # --max-requests-jitter "$WORKER_MAX_REQUEST_JITTER" \
     --chdir "$SCRIPT_DIR" \
     --timeout "$TIMEOUT" \
     --bind "$HOST:$PORT" \
     "$APP_MODULE" 2>&1 | tee "$LOG_FILE" &
+
+    # --max-requests "$WORKER_MAX_REQUEST_BEFORE_TERMINATE" \
+    # --max-requests-jitter "$WORKER_MAX_REQUEST_JITTER" \
 
 # Capture the PID of the last command in the pipeline (tee)
 PIPELINE_PID=$!

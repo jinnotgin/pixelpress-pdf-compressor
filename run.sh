@@ -103,12 +103,13 @@ echo "   Logs will be streamed here and also saved to '$LOG_FILE'."
     --workers "$WORKERS" \
     --threads "$THREADS" \
     --worker-class "$WORKER_CLASS" \
-    # --max-requests "$WORKER_MAX_REQUEST_BEFORE_TERMINATE" \
-    # --max-requests-jitter "$WORKER_MAX_REQUEST_JITTER" \
     --chdir "$SCRIPT_DIR" \
     --timeout "$TIMEOUT" \
     --bind "$HOST:$PORT" \
     "$APP_MODULE" 2>&1 | tee "$LOG_FILE" &
+    
+    # --max-requests "$WORKER_MAX_REQUEST_BEFORE_TERMINATE" \
+    # --max-requests-jitter "$WORKER_MAX_REQUEST_JITTER" \
 
 PIPELINE_PID=$!
 sleep 1
