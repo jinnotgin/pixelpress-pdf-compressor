@@ -37,9 +37,9 @@ CPU_COUNT=$(python3 -c 'import os; print(os.cpu_count() or 2)')
 #    `GUNICORN_WORKERS=4 GUNICORN_THREADS=2 ./run.sh`
 DEFAULT_WORKERS=$CPU_COUNT
 WORKERS=${GUNICORN_WORKERS:-$DEFAULT_WORKERS}
-THREADS=${GUNICORN_THREADS:-2}
+# THREADS=${GUNICORN_THREADS:-2}
 WORKER_CLASS="gthread"
-# WORKER_MAX_REQUEST_BEFORE_TERMINATE=50
+WORKER_MAX_REQUEST_BEFORE_TERMINATE=1
 # WORKER_MAX_REQUEST_JITTER=10
 
 
@@ -101,14 +101,14 @@ echo "   Logs will be streamed here and also saved to '$LOG_FILE'."
 # which is essential when the script is double-clicked.
 "$GUNICORN_CMD" \
     --workers "$WORKERS" \
-    --threads "$THREADS" \
     --worker-class "$WORKER_CLASS" \
+    --max-requests "$WORKER_MAX_REQUEST_BEFORE_TERMINATE" \
     --chdir "$SCRIPT_DIR" \
     --timeout "$TIMEOUT" \
     --bind "$HOST:$PORT" \
     "$APP_MODULE" 2>&1 | tee "$LOG_FILE" &
     
-    # --max-requests "$WORKER_MAX_REQUEST_BEFORE_TERMINATE" \
+    # --threads "$THREADS" \
     # --max-requests-jitter "$WORKER_MAX_REQUEST_JITTER" \
 
 PIPELINE_PID=$!
