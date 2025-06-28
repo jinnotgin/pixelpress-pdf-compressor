@@ -1,125 +1,284 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PixelPress PDF Compressor</title>
-    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-</head>
-<body>
-    <nav class="navbar navbar-expand-lg navbar-dark bg-dark sticky-top">
-        <a class="navbar-brand" href="#">PixelPress PDF Compressor</a>
-    </nav>
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>PixelPress | Figma PDF Compressor</title>
+		<link
+			rel="icon"
+			href="{{ url_for('static', filename='logo.svg') }}"
+			type="image/svg+xml"
+		/>
+		<link
+			rel="stylesheet"
+			href="{{ url_for('static', filename='style.css') }}"
+		/>
+		<link rel="preconnect" href="https://fonts.googleapis.com" />
+		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+		<link
+			href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+			rel="stylesheet"
+		/>
+	</head>
+	<body>
+		<div class="app-container">
+			<!-- ===== SETTINGS PANEL (LEFT) ===== -->
+			<aside class="settings-panel" id="settings-panel">
+				<div class="settings-panel-header">
+					<!-- NEW: Header for collapsing on mobile -->
+					<div class="settings-header">
+						<img
+							src="{{ url_for('static', filename='logo.svg') }}"
+							class="logo-icon"
+							alt="PixelPress Logo"
+						/>
+						<h1 class="app-title">PixelPress</h1>
+					</div>
+					<div class="settings-toggle-icon">
+						<!-- NEW: Chevron icon for mobile -->
+						<svg
+							xmlns="http://www.w3.org/2000/svg"
+							width="20"
+							height="20"
+							fill="currentColor"
+							viewBox="0 0 16 16"
+						>
+							<path
+								fill-rule="evenodd"
+								d="M1.646 4.646a.5.5 0 0 1 .708 0L8 10.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708z"
+							/>
+						</svg>
+					</div>
+				</div>
 
-    <div class="container mb-4">
-        <div class="jumbotron bg-light py-3 px-4 rounded mb-4">
-            <h1 class="h4">Compress or Combine Figma PDFs</h1>
-            <p class="mb-0" style="font-size: 0.95rem;">Upload PDFs (up to 250MB each) to convert pages into images within a new PDF (often smaller), or combine all pages into a single image.</p>
-        </div>
-
-        <div class="card shadow-sm mb-4">
-            <div class="card-header">
-                <h5 class="mb-0">1. Select Files & Options</h5>
-            </div>
-            <div class="card-body drop-zone-container" id="drop-zone">
-                <form id="upload-form" enctype="multipart/form-data">
-                    <div class="form-group">
-                        <label for="pdf-file">Choose PDF files (multiple allowed) or drag & drop here:</label>
-                        <div class="custom-file">
-                            <input type="file" class="custom-file-input" id="pdf-file" name="pdf_file" accept=".pdf" required multiple>
-                            <label class="custom-file-label" for="pdf-file" data-browse="Browse">Select file(s)...</label>
+				<div class="settings-body">
+					<!-- This part will collapse -->
+					<form id="options-form">
+						<!-- Form content remains the same... -->
+						<div class="form-group">
+							<label class="form-label" for="format-pdf-output"
+								>Output Format</label
+							>
+							<div class="segmented-control">
+								<input
+									type="radio"
+									id="format-pdf-output"
+									name="output_target_format"
+									value="pdf"
+									checked
+								/>
+								<label for="format-pdf-output">PDF</label>
+								<input
+									type="radio"
+									id="format-image-output"
+									name="output_target_format"
+									value="image"
+								/>
+								<label for="format-image-output">Image</label>
+							</div>
+						</div>
+						<div class="form-group">
+							<label class="form-label">Conversion Quality</label>
+							<div class="sub-group">
+								<label for="dpi" class="form-label-small"
+									>Resolution (DPI)</label
+								>
+								<div class="range-input-wrapper">
+									<input
+										type="range"
+										class="form-range"
+										id="dpi"
+										name="dpi"
+										value="72"
+										min="10"
+										max="300"
+										step="1"
+									/>
+									<div class="range-value-input-group">
+										<input
+											type="number"
+											id="dpi-number-input"
+											class="range-number-input"
+											value="72"
+											min="10"
+											max="300"
+										/>
+										<span>DPI</span>
+									</div>
+								</div>
+							</div>
+							<div class="sub-group">
+								<label for="image_format" class="form-label-small"
+									>Image Type</label
+								>
+								<div class="segmented-control">
+									<input
+										type="radio"
+										name="image_format"
+										id="format-jpeg"
+										value="jpeg"
+										checked
+									/>
+									<label for="format-jpeg">JPEG</label>
+									<input
+										type="radio"
+										name="image_format"
+										id="format-png"
+										value="png"
+									/>
+									<label for="format-png">PNG</label>
+								</div>
+							</div>
+							<div class="sub-group" id="jpeg-quality-group">
+								<label for="jpeg_quality" class="form-label-small"
+									>JPEG Quality</label
+								>
+								<div class="range-input-wrapper">
+									<input
+										type="range"
+										class="form-range"
+										id="jpeg_quality"
+										name="jpeg_quality"
+										value="75"
+										min="1"
+										max="100"
+										step="1"
+									/>
+									<div class="range-value-input-group">
+										<input
+											type="number"
+											id="jpeg-quality-number-input"
+											class="range-number-input"
+											value="75"
+											min="1"
+											max="100"
+										/>
+										<span>%</span>
+									</div>
+								</div>
+							</div>
+						</div>
+                        <!-- MOVED: Reset button to end of form -->
+                        <div class="form-action-group">
+                            <button type="button" id="reset-settings-btn" class="button-secondary">
+                                Reset to Default
+                            </button>
                         </div>
-                        <small class="form-text text-muted">Max file size per file: 250MB.</small>
-                    </div>
+					</form>
+				</div>
 
-                    <div class="form-group">
-                        <label>Output Format (for each file):</label>
-                        <div>
-                            <div class="form-check form-check-inline">
-                                <input class="form-check-input" type="radio" name="output_target_format" id="format-pdf-output" value="pdf" checked>
-                                <label class="form-check-label" for="format-pdf-output">PDF</label>
-                            </div>
-                            <div class="form-check form-check-inline">
-                                <input class="form-check-input" type="radio" name="output_target_format" id="format-image-output" value="image">
-                                <label class="form-check-label" for="format-image-output">Image (Stitched Pages)</label>
-                            </div>
-                        </div>
-                    </div>
+				<footer class="settings-footer">
+					v0.6 | by <a href="https://linjin.me" target="_blank">Jin</a> with
+					<a
+						href="https://developers.googleblog.com/en/gemini-2-5-thinking-model-updates/"
+						target="_blank"
+						>Gemini 2.5 Pro</a
+					>
+				</footer>
+			</aside>
 
-                    <div class="form-group">
-                        <a href="#advanced-options" data-toggle="collapse" class="text-primary">
-                            Advanced Options <small>(applies to files added next, click to expand/collapse)</small>
-                        </a>
-                        <div id="advanced-options" class="collapse mt-2">
-                            <div class="card card-body bg-light border">
-                                <p class="text-muted small text-left">These settings control how PDF pages are converted to images. This applies to pages within the "New PDF" output, or to the final "Single Image" output type.</p>
-                                <div class="form-group text-left">
-                                    <label for="dpi">DPI (Dots Per Inch):</label>
-                                    <input type="number" class="form-control" id="dpi" name="dpi" value="72" min="10" max="600">
-                                    <small class="form-text text-muted">Higher DPI means better image quality but can increase file size. Default: 72.</small>
-                                </div>
+			<!-- ===== CONTENT PANEL (RIGHT) ===== -->
+			<main class="content-panel">
+				<!-- Content panel remains unchanged -->
+                <div class="content-header">
+					<h2 id="content-title">Uploads</h2>
+					<div class="header-actions">
+						<button id="add-files-btn" class="button-primary">
+							<svg
+								xmlns="http://www.w3.org/2000/svg"
+								width="16"
+								height="16"
+								fill="currentColor"
+								viewBox="0 0 16 16"
+							>
+								<path
+									d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5z"
+								/>
+								<path
+									d="M7.646 1.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1-.708.708L8.5 2.707V11.5a.5.5 0 0 1-1 0V2.707L5.354 4.854a.5.5 0 1 1-.708-.708l3-3z"
+								/>
+							</svg>
+							<span>Add PDF Files</span>
+						</button>
+						<button
+							id="clear-log-btn"
+							class="button-icon"
+							title="Clear Finished Items"
+							disabled
+						>
+							<svg
+								xmlns="http://www.w3.org/2000/svg"
+								width="20"
+								height="20"
+								fill="currentColor"
+								viewBox="0 0 16 16"
+							>
+								<path
+									d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0V6z"
+								/>
+								<path
+									fill-rule="evenodd"
+									d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1v1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4H4.118zM2.5 3V2h11v1h-11z"
+								/>
+							</svg>
+						</button>
+					</div>
+				</div>
 
-                                <div class="form-group mt-3 text-left">
-                                    <label>Page/Image Raster Format:</label>
-                                    <div>
-                                        <div class="form-check form-check-inline">
-                                            <input class="form-check-input" type="radio" name="image_format" id="format-jpeg" value="jpeg" checked>
-                                            <label class="form-check-label" for="format-jpeg">JPEG (Lossy, Smaller)</label>
-                                        </div>
-                                        <div class="form-check form-check-inline">
-                                            <input class="form-check-input" type="radio" name="image_format" id="format-png" value="png">
-                                            <label class="form-check-label" for="format-png">PNG (Lossless, Larger)</label>
-                                        </div>
-                                    </div>
-                                </div>
+				<div
+					id="global-error-banner"
+					class="error-banner"
+					style="display: none"
+				>
+					<svg
+						xmlns="http://www.w3.org/2000/svg"
+						width="20"
+						height="20"
+						fill="currentColor"
+						viewBox="0 0 16 16"
+						style="flex-shrink: 0"
+					>
+						<path
+							d="M8.982 1.566a1.13 1.13 0 0 0-1.96 0L.165 13.233c-.457.778.091 1.767.98 1.767h13.713c.889 0 1.438-.99.98-1.767L8.982 1.566zM8 5c.535 0 .954.462.9.995l-.35 3.507a.552.552 0 0 1-1.1 0L7.1 5.995A.905.905 0 0 1 8 5zm.002 6a1 1 0 1 1 0 2 1 1 0 0 1 0-2z"
+						/>
+					</svg>
+					<span id="global-error-message"></span>
+				</div>
 
-                                <div class="form-group text-left" id="jpeg-quality-group">
-                                    <label for="jpeg_quality">JPEG Quality (1-100):</label>
-                                    <input type="number" class="form-control" id="jpeg_quality" name="jpeg_quality" value="75" min="1" max="100">
-                                    <small class="form-text text-muted">Applies if JPEG format is selected. Higher is better quality & larger size. Default: 75.</small>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    <button type="submit" class="btn btn-primary btn-lg">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-upload mr-1" viewBox="0 0 16 16">
-                            <path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5z"/>
-                            <path d="M7.646 1.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1-.708.708L8.5 2.707V11.5a.5.5 0 0 1-1 0V2.707L5.354 4.854a.5.5 0 1 1-.708-.708l3-3z"/>
-                        </svg>
-                        <span>Add Selected Files to Queue</span>
-                    </button>
-                </form>
-            </div>
-        </div>
+				<div class="drop-zone" id="drop-zone">
+					<div id="file-list"></div>
+					<div class="drop-zone-prompt" id="drop-zone-prompt">
+						<svg
+							class="upload-icon"
+							xmlns="http://www.w3.org/2000/svg"
+							width="48"
+							height="48"
+							fill="currentColor"
+							viewBox="0 0 16 16"
+						>
+							<path
+								fill-rule="evenodd"
+								d="M8 0a5.53 5.53 0 0 0-3.594 1.342c-.766.66-1.321 1.52-1.464 2.383C1.266 4.095 0 5.555 0 7.318 0 9.366 1.708 11 3.781 11H7.5V5.707L5.354 7.854a.5.5 0 1 1-.708-.708l3-3a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1-.708.708L8.5 5.707V11h4.188C14.502 11 16 9.57 16 7.773c0-1.636-1.242-2.969-2.834-3.194C12.923 1.999 10.69 0 8 0zm-.5 14.5V11h1v3.5a.5.5 0 0 1-1 0z"
+							/>
+						</svg>
+						<p class="prompt-text"><strong>Drag & Drop PDFs Here</strong></p>
+						<p class="prompt-text-small">or use the "Add PDF Files" button</p>
+						<input
+							type="file"
+							id="pdf-file-input"
+							name="pdf_file"
+							accept=".pdf"
+							required
+							multiple
+							style="display: none"
+						/>
+						<p class="prompt-text-small muted">Max 250MB per file</p>
+					</div>
+				</div>
+			</main>
+		</div>
 
-        <div id="global-error-area" class="alert alert-danger mt-4" style="display: none;">
-            <strong>Error:</strong> <span id="global-error-message"></span>
-        </div>
-
-        <div id="file-processing-log-area" class="card shadow-sm mb-4" style="display: none;">
-            <div class="card-header d-flex justify-content-between align-items-center">
-                <h5 class="mb-0">2. File Processing Log</h5>
-                <button id="clear-log-btn" class="btn btn-sm btn-outline-danger">Clear Finished</button>
-            </div>
-            <div class="card-body p-0">
-                <ul id="file-log-list" class="list-group list-group-flush">
-                    <!-- File items will be dynamically added here -->
-                </ul>
-                <p id="no-files-message" class="text-muted text-center p-3">No files processed or in queue yet. Add some files above.</p>
-            </div>
-        </div>
-    </div>
-
-    <footer class="footer mt-auto py-3 bg-light text-center">
-        <div class="container">
-            <span class="text-muted">v0.5.2 - Created by <a href="https://linjin.me" target="_blank">Jin</a>, using <a href="https://developers.googleblog.com/en/gemini-2-5-thinking-model-updates/" target="_blank">Gemini 2.5 Pro</a>.</span>
-        </div>
-    </footer>
-
-    <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.5.3/dist/umd/popper.min.js"></script>
-    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
-    <script src="{{ url_for('static', filename='script.js') }}"></script>
-</body>
+		<div id="toast-container"></div>
+		<script src="{{ url_for('static', filename='script.js') }}"></script>
+	</body>
 </html>

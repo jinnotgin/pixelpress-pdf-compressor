@@ -1,114 +1,82 @@
 document.addEventListener('DOMContentLoaded', function () {
-    const uploadForm = document.getElementById('upload-form');
-    const pdfFileInput = document.getElementById('pdf-file');
-    const customFileLabel = document.querySelector('.custom-file-label');
-    const submitButton = uploadForm.querySelector('button[type="submit"]');
-
-    const imageFormatRadios = document.querySelectorAll('input[name="image_format"]');
-    const jpegQualityGroup = document.getElementById('jpeg-quality-group');
-    const jpegQualityInput = document.getElementById('jpeg_quality');
-    const dpiInput = document.getElementById('dpi');
-
+    // --- DOM Element References ---
     const dropZone = document.getElementById('drop-zone');
-
-    const fileProcessingLogArea = document.getElementById('file-processing-log-area');
-    const fileLogList = document.getElementById('file-log-list');
-    const noFilesMessage = document.getElementById('no-files-message');
-    const clearLogBtn = document.getElementById('clear-log-btn');
-
-    const globalErrorArea = document.getElementById('global-error-area');
+    const dropZonePrompt = document.getElementById('drop-zone-prompt');
+    const fileListContainer = document.getElementById('file-list');
+    const fileInput = document.getElementById('pdf-file-input');
+    const addFilesBtn = document.getElementById('add-files-btn');
+    const contentTitle = document.getElementById('content-title');
+    const globalErrorBanner = document.getElementById('global-error-banner');
     const globalErrorMessage = document.getElementById('global-error-message');
 
+    const settingsPanel = document.getElementById('settings-panel');
+    const settingsPanelHeader = document.querySelector('.settings-panel-header');
+    const dpiInput = document.getElementById('dpi');
+    const dpiNumberInput = document.getElementById('dpi-number-input'); // New
+    const jpegQualityInput = document.getElementById('jpeg_quality');
+    const jpegQualityNumberInput = document.getElementById('jpeg-quality-number-input'); // New
+    const jpegQualityGroup = document.getElementById('jpeg-quality-group');
+    const imageFormatRadios = document.querySelectorAll('input[name="image_format"]');
+
+    const clearLogBtn = document.getElementById('clear-log-btn');
+    const toastContainer = document.getElementById('toast-container');
+    const resetSettingsBtn = document.getElementById('reset-settings-btn'); // ADDED
+
+    // --- State Variables ---
     let fileItems = [];
     let isCurrentlyProcessingQueueItem = false;
     let currentPollIntervalId = null;
-    let isInitialLoad = true;
-    
     let isServerReachable = true;
     let healthCheckIntervalId = null;
+    const FRONTEND_HISTORY_LIFESPAN_HOURS = 71;
 
-    const FRONTEND_HISTORY_LIFESPAN_HOURS = 72 - 1;
-
+    // --- Initialization ---
     function initializeApp() {
-        pdfFileInput.multiple = true;
-        if (submitButton.querySelector('span')) submitButton.querySelector('span').textContent = ' Add Selected Files to Queue';
-        
-        imageFormatRadios.forEach(radio => radio.addEventListener('change', toggleJpegQualityInput));
-        toggleJpegQualityInput();
-
-        pdfFileInput.addEventListener('change', (e) => handleFiles(e.target.files));
-        
-        uploadForm.addEventListener('submit', function(event) {
-            event.preventDefault();
-            if (pdfFileInput.files.length > 0) {
-                handleFiles(pdfFileInput.files);
-            }
-        });
+        addFilesBtn.addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', (e) => handleFiles(e.target.files));
 
         ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
-            dropZone.addEventListener(eventName, preventDefaults, false);
             document.body.addEventListener(eventName, preventDefaults, false);
+            dropZone.addEventListener(eventName, preventDefaults, false);
         });
         ['dragenter', 'dragover'].forEach(eventName => dropZone.addEventListener(eventName, () => dropZone.classList.add('drag-over'), false));
         ['dragleave', 'drop'].forEach(eventName => dropZone.addEventListener(eventName, () => dropZone.classList.remove('drag-over'), false));
         dropZone.addEventListener('drop', handleDrop, false);
 
+        clearLogBtn.addEventListener('click', clearFinishedItems);
+        fileListContainer.addEventListener('click', handleFileItemActions);
+        resetSettingsBtn.addEventListener('click', resetSettingsToDefault); // ADDED
+
+        settingsPanelHeader.addEventListener('click', () => {
+            if (window.innerWidth <= 768) settingsPanel.classList.toggle('is-collapsed');
+        });
+
+        // Setup two-way data binding for range sliders and number inputs
+        setupRangeInputSync(dpiInput, dpiNumberInput);
+        setupRangeInputSync(jpegQualityInput, jpegQualityNumberInput);
+        
+        imageFormatRadios.forEach(radio => radio.addEventListener('change', toggleJpegQualityInput));
+        toggleJpegQualityInput();
+
         loadState();
-        clearOldFinishedItems();
-        renderFileLogList();
-        isInitialLoad = false;
+        pruneOldFinishedItems();
+        if (window.innerWidth <= 768 && !settingsPanel.classList.contains('is-collapsed')) {
+            settingsPanel.classList.add('is-collapsed');
+        }
+        renderFileList();
         
         checkServerHealth().then(() => {
             if (isServerReachable) {
                 processFileQueue();
             }
         });
-
-        clearLogBtn.addEventListener('click', async () => {
-            const confirmMessage = "This will permanently delete all completed and failed files from the server and clear them from this list. This action cannot be undone. Continue?";
-            
-            if (confirm(confirmMessage)) {
-                const itemsToDeleteOnServer = fileItems.filter(item =>
-                    (item.status === 'completed' || item.status === 'failed') && item.taskId
-                );
-
-                const deletionPromises = itemsToDeleteOnServer.map(item =>
-                    fetch(`/task/${item.taskId}`, { method: 'DELETE', cache: 'no-store'  })
-                        .catch(err => console.error(`Failed to delete task ${item.taskId} on server:`, err))
-                );
-
-                if (deletionPromises.length > 0) {
-                    await Promise.allSettled(deletionPromises);
-                }
-
-                fileItems = fileItems.filter(item =>
-                    item.status !== 'completed' && item.status !== 'failed'
-                );
-
-                saveState();
-                renderFileLogList();
-            }
-        });
-        
-        pdfFileInput.addEventListener('click', function() {
-            this.value = null;
-            customFileLabel.textContent = 'Select file(s)...';
-        });
-
-        fileLogList.addEventListener('click', function(event) {
-            if (event.target.closest('.remove-file-item-btn')) {
-                const button = event.target.closest('.remove-file-item-btn');
-                const itemId = button.dataset.itemId;
-                if (itemId) {
-                    removeItemFromLog(itemId);
-                }
-            }
-        });
     }
+    
+    // --- Server Health & Error Handling ---
 
     async function checkServerHealth() {
         try {
-            const response = await fetch('/health', { cache: 'no-store' }); 
+            const response = await fetch('/health', { cache: 'no-store' });
             if (!response.ok) throw new Error(`Server responded with status ${response.status}`);
             
             if (!isServerReachable) {
@@ -118,22 +86,22 @@ document.addEventListener('DOMContentLoaded', function () {
                     clearInterval(healthCheckIntervalId);
                     healthCheckIntervalId = null;
                 }
-                globalErrorArea.style.display = 'none';
-                submitButton.disabled = false;
+                globalErrorBanner.style.display = 'none';
+                addFilesBtn.disabled = false;
                 processFileQueue();
             }
         } catch (error) {
             if (isServerReachable) {
                 console.error("Server has become unreachable. Pausing operations.", error.message);
                 isServerReachable = false;
-                submitButton.disabled = true;
-                showGlobalError("Cannot connect to the server. Will keep trying to reconnect...");
+                addFilesBtn.disabled = true;
+                showGlobalError("Cannot connect to the server. Retrying automatically...");
 
                 if (currentPollIntervalId) {
                     clearInterval(currentPollIntervalId);
                     currentPollIntervalId = null;
                 }
-                isCurrentlyProcessingQueueItem = false; 
+                isCurrentlyProcessingQueueItem = false;
 
                 if (!healthCheckIntervalId) {
                     healthCheckIntervalId = setInterval(checkServerHealth, 5000);
@@ -141,44 +109,34 @@ document.addEventListener('DOMContentLoaded', function () {
             }
         }
     }
-    
+
     async function handleFetchError(error, item) {
         if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
             console.warn("Fetch failed, triggering a server health check.");
-            if (item) {
-                item.status = 'pending';
-                item.message = "Connection lost. Waiting to reconnect to server...";
-                item.progress = 0;
+            if (item && ['uploading', 'processing'].includes(item.status)) {
+                updateItemState(item, { message: "Connection lost. Waiting to reconnect..." });
             }
             isCurrentlyProcessingQueueItem = false;
             await checkServerHealth();
         } else {
             if (item) {
-                item.status = 'failed';
-                item.message = error.message;
-                item.error = error.message;
+                updateItemState(item, { status: 'failed', error: error.message, message: 'An unexpected error occurred' });
             }
             isCurrentlyProcessingQueueItem = false;
             processFileQueue();
         }
     }
 
+    // --- Core File Handling and Processing ---
+
     function handleFiles(files) {
         if (!isServerReachable) {
-            showGlobalError("Cannot add files. The server is currently unreachable.");
+            showToast("Cannot add files while server is unreachable.");
             return;
         }
 
-        pdfFileInput.value = '';
-        customFileLabel.textContent = 'Select file(s)...';
-        globalErrorArea.style.display = 'none';
-
+        fileInput.value = '';
         if (!files || files.length === 0) return;
-        
-        const currentFileNamesAndSettings = new Set(fileItems.map(item => item.originalFilename + item.settings.outputTargetFormat + item.settings.pageRasterFormat + item.settings.dpi));
-
-        if (files.length === 1) customFileLabel.textContent = files[0].name;
-        else customFileLabel.textContent = `${files.length} files selected`;
 
         const currentSettings = {
             dpi: dpiInput.value,
@@ -187,21 +145,22 @@ document.addEventListener('DOMContentLoaded', function () {
             outputTargetFormat: document.querySelector('input[name="output_target_format"]:checked').value
         };
 
-        let filesAddedCount = 0;
+        const activeFileKeys = new Set(fileItems.filter(item => ['pending', 'processing', 'uploading'].includes(item.status)).map(item => item.originalFilename + item.settings.outputTargetFormat + item.settings.pageRasterFormat + item.settings.dpi));
+
         for (const file of files) {
             if (!file.name.toLowerCase().endsWith('.pdf') && file.type !== 'application/pdf') {
-                showGlobalError(`File "${file.name}" is not a PDF and was skipped.`);
+                showToast(`Skipped: "${file.name}" is not a PDF.`);
                 continue;
             }
             const uniqueFileKey = file.name + currentSettings.outputTargetFormat + currentSettings.pageRasterFormat + currentSettings.dpi;
-            if (currentFileNamesAndSettings.has(uniqueFileKey) && fileItems.find(item => (item.originalFilename + item.settings.outputTargetFormat + item.settings.pageRasterFormat + item.settings.dpi) === uniqueFileKey && ['pending', 'processing', 'uploading'].includes(item.status))) {
-                 console.log(`Skipping duplicate or already active file: ${file.name} with same settings.`);
-                 continue;
+            if (activeFileKeys.has(uniqueFileKey)) {
+                console.log(`Skipping duplicate active file: ${file.name}`);
+                continue;
             }
 
             const newItem = {
                 id: `file-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-                file: file, 
+                file: file,
                 originalFilename: file.name,
                 status: 'pending',
                 progress: 0,
@@ -209,31 +168,27 @@ document.addEventListener('DOMContentLoaded', function () {
                 taskId: null,
                 downloadUrl: null,
                 userFacingOutputFilename: null,
-                originalSizeBytes: file.size, 
+                originalSizeBytes: file.size,
                 processedSizeBytes: null,
                 settings: { ...currentSettings },
                 timestamp: Date.now(),
                 error: null,
             };
-            fileItems.unshift(newItem); 
-            currentFileNamesAndSettings.add(uniqueFileKey);
-            filesAddedCount++;
+            fileItems.unshift(newItem);
         }
-        
-        if (filesAddedCount > 0) {
-            saveState();
-            renderFileLogList(); 
-            processFileQueue();
-        }
+
+        saveState();
+        renderFileList();
+        processFileQueue();
     }
 
     async function processFileQueue() {
         if (isCurrentlyProcessingQueueItem || !isServerReachable) return;
 
-        const itemToReconnect = fileItems.find(item => item.status === 'processing' && item.taskId);
+        const itemToReconnect = fileItems.find(item => item.status === 'processing' && item.taskId && !item.reconnected);
         if (itemToReconnect) {
             isCurrentlyProcessingQueueItem = true;
-            console.log(`Reconnecting to active task: ${itemToReconnect.originalFilename}`);
+            itemToReconnect.reconnected = true;
             pollStatusForItem(itemToReconnect);
             return;
         }
@@ -242,19 +197,13 @@ document.addEventListener('DOMContentLoaded', function () {
         if (!currentItem) return;
 
         isCurrentlyProcessingQueueItem = true;
-        currentItem.status = 'uploading';
-        currentItem.message = 'Preparing to upload...';
-        currentItem.progress = 0;
-        currentItem.timestamp = Date.now();
-        renderFileLogList();
+        updateItemState(currentItem, { status: 'uploading', message: 'Preparing to upload...', progress: 0 });
 
         const formData = new FormData();
         formData.append('pdf_file', currentItem.file);
         formData.append('dpi', currentItem.settings.dpi);
         formData.append('image_format', currentItem.settings.pageRasterFormat);
-        if (currentItem.settings.pageRasterFormat === 'jpeg' && currentItem.settings.jpegQuality) {
-            formData.append('jpeg_quality', currentItem.settings.jpegQuality);
-        }
+        if (currentItem.settings.pageRasterFormat === 'jpeg') formData.append('jpeg_quality', currentItem.settings.jpegQuality);
         formData.append('output_target_format', currentItem.settings.outputTargetFormat);
 
         try {
@@ -262,26 +211,19 @@ document.addEventListener('DOMContentLoaded', function () {
             currentItem.file = null;
 
             if (!response.ok) {
-                let errorMsg = `Upload failed: ${response.status}`;
-                try { const errorData = await response.json(); errorMsg = errorData.error || errorMsg; } catch (e) {}
-                throw new Error(errorMsg);
+                const errorData = await response.json().catch(() => ({}));
+                throw new Error(errorData.error || `Upload failed with status ${response.status}`);
             }
 
             const data = await response.json();
             if (data.task_id) {
-                currentItem.taskId = data.task_id;
-                currentItem.status = 'processing';
-                currentItem.message = data.message || 'Processing on server...';
-                currentItem.progress = data.progress || 15;
+                updateItemState(currentItem, { taskId: data.task_id, status: 'processing', message: 'Processing...', progress: 15 });
                 pollStatusForItem(currentItem);
             } else {
                 throw new Error(data.error || 'Failed to start processing task.');
             }
         } catch (err) {
             await handleFetchError(err, currentItem);
-        } finally {
-            saveState();
-            renderFileLogList();
         }
     }
 
@@ -295,7 +237,7 @@ document.addEventListener('DOMContentLoaded', function () {
             }
 
             const currentItemInPoll = fileItems.find(fi => fi.id === item.id);
-            if (!currentItemInPoll || !currentItemInPoll.taskId || currentItemInPoll.status === 'cancelling') {
+            if (!currentItemInPoll || !currentItemInPoll.taskId || ['completed', 'failed', 'cancelling'].includes(currentItemInPoll.status)) {
                 clearInterval(currentPollIntervalId);
                 isCurrentlyProcessingQueueItem = false;
                 processFileQueue();
@@ -303,146 +245,199 @@ document.addEventListener('DOMContentLoaded', function () {
             }
 
             try {
-                const response = await fetch(`/status/${currentItemInPoll.taskId}`, { cache: 'no-store' }); 
+                const response = await fetch(`/status/${currentItemInPoll.taskId}`, { cache: 'no-store' });
                 if (!response.ok) {
-                    clearInterval(currentPollIntervalId);
-                    let errorMsg = `Error fetching status: ${response.statusText}`;
-                    try { const errorData = await response.json(); errorMsg = errorData.message || errorData.error || errorMsg; } catch (e) {}
-                    throw new Error(errorMsg);
+                    const errorData = await response.json().catch(() => ({}));
+                    throw new Error(errorData.message || errorData.error || `Server returned status ${response.status}`);
                 }
+
                 const data = await response.json();
-                
-                currentItemInPoll.message = data.message || 'Processing...';
-                currentItemInPoll.progress = Math.round(data.progress || currentItemInPoll.progress);
-                currentItemInPoll.status = data.status;
+                const updates = {
+                    message: data.message || currentItemInPoll.message,
+                    progress: Math.round(data.progress || currentItemInPoll.progress),
+                    status: data.status
+                };
 
-                if (data.status === 'completed') {
+                if (data.status === 'completed' || data.status === 'failed') {
                     clearInterval(currentPollIntervalId);
-                    currentItemInPoll.downloadUrl = `/download/${currentItemInPoll.taskId}`;
-                    currentItemInPoll.userFacingOutputFilename = data.output_filename;
-                    currentItemInPoll.originalSizeBytes = data.original_size_bytes;
-                    currentItemInPoll.processedSizeBytes = data.processed_size_bytes;
                     isCurrentlyProcessingQueueItem = false;
-                    processFileQueue();
-                } else if (data.status === 'failed') {
-                    clearInterval(currentPollIntervalId);
-                    currentItemInPoll.error = data.message || 'Processing failed on server.';
-                    currentItemInPoll.originalSizeBytes = data.original_size_bytes;
-                    isCurrentlyProcessingQueueItem = false;
+                    if (data.status === 'completed') {
+                        updates.downloadUrl = `/download/${currentItemInPoll.taskId}`;
+                        updates.userFacingOutputFilename = data.output_filename;
+                        updates.originalSizeBytes = data.original_size_bytes;
+                        updates.processedSizeBytes = data.processed_size_bytes;
+                    } else {
+                        updates.error = data.message || 'Processing failed on server.';
+                    }
                     processFileQueue();
                 }
-
+                updateItemState(currentItemInPoll, updates);
             } catch (err) {
-                console.warn("Polling failed, triggering server health check.");
                 clearInterval(currentPollIntervalId);
                 await handleFetchError(err, currentItemInPoll);
-            } finally {
-                const itemToUpdate = fileItems.find(fi => fi.id === item.id);
-                if(itemToUpdate) itemToUpdate.timestamp = Date.now();
-                saveState();
-                renderFileLogList();
             }
         }, 2000);
     }
-    
+
+    // --- UI Rendering ---
+
+    function renderFileList() {
+        fileListContainer.innerHTML = '';
+        if (fileItems.length === 0) {
+            dropZonePrompt.classList.remove('hidden');
+        } else {
+            dropZonePrompt.classList.add('hidden');
+            fileItems.forEach(item => {
+                const itemEl = createFileItemElement(item);
+                updateFileItemElement(itemEl, item);
+                fileListContainer.appendChild(itemEl);
+            });
+        }
+        updateAppUI();
+    }
+
+    function createFileItemElement(item) {
+        const el = document.createElement('div');
+        el.className = 'file-item';
+        el.dataset.id = item.id;
+        return el;
+    }
+
+    function updateFileItemElement(el, item) {
+        if (item.status === 'completed') {
+            el.classList.add('is-completed');
+            let sizeInfo = '';
+            if (item.originalSizeBytes != null && item.processedSizeBytes != null) {
+                const savings = item.originalSizeBytes - item.processedSizeBytes;
+                const savingsText = savings > 0 ? `<span class="size-reduction">(${((savings / item.originalSizeBytes) * 100).toFixed(0)}% smaller)</span>` : '';
+                sizeInfo = `From ${formatBytes(item.originalSizeBytes)} → ${formatBytes(item.processedSizeBytes)} ${savingsText}`;
+            }
+            el.innerHTML = `
+                <a href="${item.downloadUrl}" download="${item.userFacingOutputFilename}" class="button-download-primary">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clip-rule="evenodd" /></svg>
+                    <span>Download</span>
+                </a>
+                <div class="file-item-details">
+                    <div>
+                        <div class="file-name" title="${item.userFacingOutputFilename}">${item.userFacingOutputFilename}</div>
+                        <div class="file-message">${sizeInfo}</div>
+                    </div>
+                </div>
+                <div class="file-item-actions">
+                    <div class="status-badge-container">COMPLETED</div>
+                    <button class="button-icon remove-file-item-btn" title="Remove Item"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" viewBox="0 0 16 16"><path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z"/></svg></button>
+                </div>`;
+            return;
+        }
+
+        el.classList.remove('is-completed');
+        el.innerHTML = `
+            <div class="file-item-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M4,2H16L20,6V20A2,2 0 0,1 18,22H4A2,2 0 0,1 2,20V4A2,2 0 0,1 4,2M15,7H19.5L14,2.5V7A1,1 0 0,0 15,7Z" /></svg></div>
+            <div class="file-item-details"><div class="file-name" title="${item.originalFilename}">${item.originalFilename}</div><div class="file-message"></div><div class="progress-bar"><div class="progress-bar-inner"></div></div></div>
+            <div class="file-item-actions"></div>`;
+
+        el.querySelector('.file-message').classList.remove('error');
+        if (item.status === 'failed' && item.error) {
+            el.querySelector('.file-message').textContent = `Error: ${item.error}`;
+            el.querySelector('.file-message').classList.add('error');
+        } else {
+            el.querySelector('.file-message').textContent = item.message || '';
+        }
+        if (['uploading', 'processing'].includes(item.status)) {
+            el.querySelector('.progress-bar').style.display = 'block';
+            el.querySelector('.progress-bar-inner').style.width = `${item.progress}%`;
+        } else {
+            el.querySelector('.progress-bar').style.display = 'none';
+        }
+        let statusBadge = '';
+        switch (item.status) {
+            case 'pending': statusBadge = `<span class="status-badge pending">Pending</span>`; break;
+            case 'uploading': case 'processing': statusBadge = `<span class="status-badge processing">${item.status}</span>`; break;
+            case 'failed': statusBadge = `<span class="status-badge failed">Failed</span>`; break;
+            case 'cancelling': statusBadge = `<span class="status-badge warning">Cancelling</span>`; break;
+        }
+        el.querySelector('.file-item-actions').innerHTML = statusBadge + `<button class="button-icon remove-file-item-btn" title="Remove Item"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" viewBox="0 0 16 16"><path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z"/></svg></button>`;
+    }
+
+    function updateAppUI() {
+        const activeItem = fileItems.find(item => ['uploading', 'processing'].includes(item.status));
+        if (activeItem) {
+            const finishedCount = fileItems.filter(item => ['completed', 'failed'].includes(item.status)).length;
+            contentTitle.textContent = `Processing file ${finishedCount + 1} of ${fileItems.length}`;
+        } else if (fileItems.length > 0) {
+            const pendingCount = fileItems.filter(item => item.status === 'pending').length;
+            contentTitle.textContent = pendingCount > 0 ? `${pendingCount} item${pendingCount > 1 ? 's' : ''} in queue` : 'All tasks complete';
+        } else {
+            contentTitle.textContent = 'Ready for your PDFs';
+        }
+        clearLogBtn.disabled = !fileItems.some(item => ['completed', 'failed'].includes(item.status));
+    }
+
+    function updateItemState(item, updates) {
+        Object.assign(item, updates, { timestamp: Date.now() });
+        saveState();
+        const itemEl = fileListContainer.querySelector(`.file-item[data-id="${item.id}"]`);
+        if (itemEl) updateFileItemElement(itemEl, item);
+        else renderFileList();
+        updateAppUI();
+    }
+
+    // --- State Persistence & Helpers ---
+
     async function removeItemFromLog(itemId) {
         const itemIndex = fileItems.findIndex(item => item.id === itemId);
         if (itemIndex === -1) return;
         const itemToRemove = fileItems[itemIndex];
-        const isActive = ['uploading', 'processing'].includes(itemToRemove.status);
-        const confirmMessage = isActive
-            ? "Are you sure you want to cancel this active process? This cannot be undone."
-            : "Are you sure you want to permanently delete this item and its output file from the server?";
-        if (itemToRemove.status === 'pending' || confirm(confirmMessage)) {
-            if (itemToRemove.taskId && isServerReachable) {
-                try {
-                    itemToRemove.status = 'cancelling'; itemToRemove.message = 'Requesting cancellation/deletion...'; renderFileLogList();
-                    await fetch(`/task/${itemToRemove.taskId}`, { method: 'DELETE', cache: 'no-store' });
-                } catch (err) {
-                    itemToRemove.status = 'failed'; itemToRemove.error = `Error: ${err.message}`;
-                    itemToRemove.message = `Could not remove task. ${err.message}`;
-                    saveState(); renderFileLogList(); return;
-                }
-            }
-            if (itemToRemove.id === fileItems.find(i => i.status === 'uploading' || i.status === 'processing' || i.status === 'cancelling')?.id) {
-                clearInterval(currentPollIntervalId); currentPollIntervalId = null; isCurrentlyProcessingQueueItem = false;
-            }
-            fileItems.splice(itemIndex, 1);
-            saveState(); renderFileLogList();
-            if (!isCurrentlyProcessingQueueItem) processFileQueue();
+        
+        if (['uploading', 'processing'].includes(itemToRemove.status)) {
+            if (!confirm("This will cancel the active process. Are you sure?")) return;
         }
-    }
-    
-    function renderFileLogList() {
-        fileLogList.innerHTML = '';
-        if (fileItems.length === 0) { fileProcessingLogArea.style.display = 'none'; return; }
-        fileProcessingLogArea.style.display = 'block'; noFilesMessage.style.display = 'none';
-        if (isInitialLoad) fileItems.sort((a, b) => b.timestamp - a.timestamp);
-        fileItems.forEach(item => {
-            const li = document.createElement('li'); li.className = 'list-group-item'; li.setAttribute('data-id', item.id);
-            let statusBadge = '', progressBarHtml = '', itemMessageHtml = '', actionsHtml = '', sizeDetailsHtml = '';
-            const lastActivityHtml = `<p class="mb-1"><small class="text-muted" style="font-size: 0.8em;">Last activity: ${new Date(item.timestamp).toLocaleTimeString()}</small></p>`;
-            if (item.status === 'failed' && item.error) itemMessageHtml = `<p class="mb-1"><small class="text-danger">Error: ${item.error}</small></p>`;
-            else if (item.message) itemMessageHtml = `<p class="mb-1"><small class="text-muted">${item.message}</small></p>`;
-            switch (item.status) {
-                case 'pending': statusBadge = `<span class="badge badge-info">PENDING</span>`; break;
-                case 'uploading': case 'processing':
-                    statusBadge = `<span class="badge badge-primary">${item.status.toUpperCase()}</span>`;
-                    progressBarHtml = `<div class="progress mt-1" style="height: 10px;"><div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: ${item.progress}%;" aria-valuenow="${item.progress}">${item.progress}%</div></div>`;
-                    break;
-                case 'cancelling': statusBadge = `<span class="badge badge-warning">CANCELLING</span>`; break;
-                case 'completed':
-                    statusBadge = `<span class="badge badge-success">COMPLETED</span>`;
-                    if (item.downloadUrl) actionsHtml = `<a href="${item.downloadUrl}" download="${item.userFacingOutputFilename}" class="btn btn-sm btn-success mt-2">Download</a>`;
-                    if (item.originalSizeBytes != null && item.processedSizeBytes != null) {
-                        const original = item.originalSizeBytes, processed = item.processedSizeBytes, savings = original - processed;
-                        let savingsText = (savings > 0) ? `<span class="text-success">Saved ${formatBytes(savings)} (${((savings / original) * 100).toFixed(1)}%)</span>` : (savings < 0) ? `<span class="text-danger">Increased by ${formatBytes(Math.abs(savings))}</span>` : `<span class="text-info">No size change</span>`;
-                        sizeDetailsHtml = `<p class="mb-0 mt-1"><small class="text-muted">Original: ${formatBytes(original)} | Processed: ${formatBytes(processed)}. ${savingsText}</small></p>`;
-                    }
-                    break;
-                case 'failed':
-                    statusBadge = `<span class="badge badge-danger">FAILED</span>`;
-                    if (item.originalSizeBytes != null) sizeDetailsHtml = `<p class="mb-0 mt-1"><small class="text-muted">Original Size: ${formatBytes(item.originalSizeBytes)}</small></p>`;
-                    break;
+
+        if (itemToRemove.taskId && isServerReachable) {
+            try {
+                updateItemState(itemToRemove, { status: 'cancelling', message: 'Requesting cancellation...' });
+                await fetch(`/task/${itemToRemove.taskId}`, { method: 'DELETE', cache: 'no-store' });
+            } catch (err) {
+                showToast(`Could not remove task on server: ${err.message}`);
             }
-            const removeButtonHtml = `<button type="button" class="close remove-file-item-btn ml-2 p-0" data-item-id="${item.id}" title="Remove/Cancel this item" style="font-size: 1.3rem; line-height: 1;"><span aria-hidden="true">×</span></button>`;
-            li.innerHTML = `<div class="d-flex justify-content-between align-items-start mb-1"><span class="font-weight-bold" style="flex-grow: 1; margin-right: 10px;">${item.originalFilename}</span><div class="d-flex align-items-center">${statusBadge}${removeButtonHtml}</div></div>${lastActivityHtml}${itemMessageHtml}${sizeDetailsHtml}${progressBarHtml}${actionsHtml}`;
-            fileLogList.appendChild(li);
-        });
+        }
+        if (itemToRemove.id === fileItems.find(i => ['uploading', 'processing', 'cancelling'].includes(i.status))?.id) {
+            clearInterval(currentPollIntervalId);
+            currentPollIntervalId = null;
+            isCurrentlyProcessingQueueItem = false;
+        }
+        fileItems.splice(itemIndex, 1);
+        saveState();
+        renderFileList();
+        if (!isCurrentlyProcessingQueueItem) processFileQueue();
     }
 
-    function showGlobalError(message) { globalErrorMessage.textContent = message; globalErrorArea.style.display = 'block'; }
-    function preventDefaults(e) { e.preventDefault(); e.stopPropagation(); }
-    function handleDrop(e) { handleFiles(e.dataTransfer.files); }
-
-    function toggleJpegQualityInput() {
-        const selectedFormat = document.querySelector('input[name="image_format"]:checked').value;
-        jpegQualityGroup.style.display = (selectedFormat === 'jpeg') ? 'block' : 'none';
-        jpegQualityInput.disabled = (selectedFormat !== 'jpeg');
-    }
-
-    function formatBytes(bytes, decimals = 2) {
-        if (bytes == null || isNaN(bytes)) return 'N/A';
-        if (bytes === 0) return '0 Bytes';
-        const k = 1024, dm = decimals < 0 ? 0 : decimals, sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
-        const i = Math.floor(Math.log(bytes) / Math.log(k));
-        return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+    async function clearFinishedItems() {
+        const confirmMessage = "This will permanently delete all completed and failed files from the server and clear them from this list. Continue?";
+        if (!confirm(confirmMessage)) return;
+        const itemsToDelete = fileItems.filter(item => (item.status === 'completed' || item.status === 'failed') && item.taskId);
+        if (itemsToDelete.length > 0 && isServerReachable) {
+            const deletionPromises = itemsToDelete.map(item => fetch(`/task/${item.taskId}`, { method: 'DELETE', cache: 'no-store' }).catch(err => console.error(`Failed to delete task ${item.taskId} on server:`, err)));
+            await Promise.allSettled(deletionPromises);
+        }
+        fileItems = fileItems.filter(item => item.status !== 'completed' && item.status !== 'failed');
+        saveState();
+        renderFileList();
     }
 
     function loadState() {
         const storedState = localStorage.getItem('pixelPressFileItems');
         if (storedState) {
-            try { 
+            try {
                 fileItems = JSON.parse(storedState);
                 fileItems.forEach(item => {
                     if (['pending', 'uploading', 'processing', 'cancelling'].includes(item.status)) {
-                        if (item.taskId) { item.status = 'processing'; item.message = "Reconnecting to check task status..."; } 
-                        else { item.status = 'failed'; item.message = "Process interrupted before server task was created."; item.error = item.message; }
+                        if (item.taskId) { item.status = 'processing'; item.message = "Reconnecting..."; item.reconnected = false; } 
+                        else { item.status = 'failed'; item.message = "Process interrupted by page reload."; item.error = item.message; }
                     }
-                    if (!item.timestamp) item.timestamp = Date.now() - FRONTEND_HISTORY_LIFESPAN_HOURS * 3600 * 1000 * 2;
                 });
-            } 
-            catch (e) { console.error("Error parsing stored state:", e); fileItems = []; }
+                fileItems.sort((a, b) => b.timestamp - a.timestamp);
+            } catch (e) { console.error("Error parsing stored state:", e); fileItems = []; }
         }
     }
 
@@ -451,7 +446,7 @@ document.addEventListener('DOMContentLoaded', function () {
         localStorage.setItem('pixelPressFileItems', JSON.stringify(storableItems));
     }
 
-    function clearOldFinishedItems() {
+    function pruneOldFinishedItems() {
         const now = Date.now();
         const maxAge = FRONTEND_HISTORY_LIFESPAN_HOURS * 60 * 60 * 1000;
         const prevLength = fileItems.length;
@@ -461,6 +456,73 @@ document.addEventListener('DOMContentLoaded', function () {
         });
         if (fileItems.length < prevLength) saveState();
     }
-    
+
+    // --- UI & Event Helpers ---
+    function setupRangeInputSync(rangeEl, numberEl) {
+        const min = parseInt(rangeEl.min, 10);
+        const max = parseInt(rangeEl.max, 10);
+        // Update number input when slider moves
+        rangeEl.addEventListener('input', () => {
+            numberEl.value = rangeEl.value;
+        });
+        // Update slider when number input changes
+        numberEl.addEventListener('input', () => {
+            const value = parseInt(numberEl.value, 10);
+            if (!isNaN(value) && value >= min && value <= max) {
+                rangeEl.value = value;
+            }
+        });
+        // Validate and clamp on leaving the input field
+        numberEl.addEventListener('change', () => {
+            let value = parseInt(numberEl.value, 10);
+            if (isNaN(value) || value < min) {
+                value = min;
+            } else if (value > max) {
+                value = max;
+            }
+            // Update both the number input (in case it was clamped) and the slider
+            numberEl.value = value;
+            rangeEl.value = value;
+        });
+    }
+
+    // ADDED: Function to reset settings form to its default values
+    function resetSettingsToDefault() {
+        const defaults = {
+            outputFormat: 'pdf',
+            dpi: 72,
+            imageFormat: 'jpeg',
+            jpegQuality: 75
+        };
+
+        // Set output format radio
+        document.getElementById('format-pdf-output').checked = true;
+
+        // Set DPI
+        dpiInput.value = defaults.dpi;
+        dpiNumberInput.value = defaults.dpi;
+
+        // Set image format radio
+        document.getElementById('format-jpeg').checked = true;
+
+        // Set JPEG Quality
+        jpegQualityInput.value = defaults.jpegQuality;
+        jpegQualityNumberInput.value = defaults.jpegQuality;
+        
+        // Ensure UI consistency for conditional fields
+        toggleJpegQualityInput();
+
+        // Give user feedback
+        showToast("Settings have been reset to default.");
+    }
+
+    function showGlobalError(message) { globalErrorMessage.textContent = message; globalErrorBanner.style.display = 'flex'; }
+    function handleDrop(e) { handleFiles(e.dataTransfer.files); }
+    function preventDefaults(e) { e.preventDefault(); e.stopPropagation(); }
+    function toggleJpegQualityInput() { jpegQualityGroup.style.display = (document.querySelector('input[name="image_format"]:checked').value === 'jpeg') ? 'block' : 'none'; }
+    function handleFileItemActions(event) { const button = event.target.closest('.remove-file-item-btn'); if (button) { const itemEl = button.closest('.file-item'); if (itemEl && itemEl.dataset.id) removeItemFromLog(itemEl.dataset.id); } }
+    function showToast(message) { const toast = document.createElement('div'); toast.className = 'toast'; toast.textContent = message; toastContainer.appendChild(toast); setTimeout(() => toast.remove(), 5000); }
+    function formatBytes(bytes, decimals = 1) { if (bytes == null || isNaN(bytes)) return 'N/A'; if (bytes === 0) return '0 B'; const k = 1024; const sizes = ['B', 'KB', 'MB', 'GB', 'TB']; const i = Math.floor(Math.log(bytes) / Math.log(k)); return parseFloat((bytes / Math.pow(k, i)).toFixed(decimals < 0 ? 0 : decimals)) + ' ' + sizes[i]; }
+
     initializeApp();
 });
