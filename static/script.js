@@ -20,6 +20,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
     const clearLogBtn = document.getElementById('clear-log-btn');
     const toastContainer = document.getElementById('toast-container');
+    const resetSettingsBtn = document.getElementById('reset-settings-btn'); // ADDED
 
     // --- State Variables ---
     let fileItems = [];
@@ -44,6 +45,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
         clearLogBtn.addEventListener('click', clearFinishedItems);
         fileListContainer.addEventListener('click', handleFileItemActions);
+        resetSettingsBtn.addEventListener('click', resetSettingsToDefault); // ADDED
 
         settingsPanelHeader.addEventListener('click', () => {
             if (window.innerWidth <= 768) settingsPanel.classList.toggle('is-collapsed');
@@ -482,6 +484,36 @@ document.addEventListener('DOMContentLoaded', function () {
             numberEl.value = value;
             rangeEl.value = value;
         });
+    }
+
+    // ADDED: Function to reset settings form to its default values
+    function resetSettingsToDefault() {
+        const defaults = {
+            outputFormat: 'pdf',
+            dpi: 72,
+            imageFormat: 'jpeg',
+            jpegQuality: 75
+        };
+
+        // Set output format radio
+        document.getElementById('format-pdf-output').checked = true;
+
+        // Set DPI
+        dpiInput.value = defaults.dpi;
+        dpiNumberInput.value = defaults.dpi;
+
+        // Set image format radio
+        document.getElementById('format-jpeg').checked = true;
+
+        // Set JPEG Quality
+        jpegQualityInput.value = defaults.jpegQuality;
+        jpegQualityNumberInput.value = defaults.jpegQuality;
+        
+        // Ensure UI consistency for conditional fields
+        toggleJpegQualityInput();
+
+        // Give user feedback
+        showToast("Settings have been reset to default.");
     }
 
     function showGlobalError(message) { globalErrorMessage.textContent = message; globalErrorBanner.style.display = 'flex'; }

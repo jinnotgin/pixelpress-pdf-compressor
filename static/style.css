@@ -73,8 +73,9 @@ body {
 .settings-body {
 	flex-grow: 1;
 	overflow-y: auto;
-	padding-top: 24px; /* Added spacing for breathing room */
+	padding-top: 24px;
 }
+/* REVERTED: Simplified footer style */
 .settings-footer {
 	font-size: 0.8rem;
 	color: var(--light-text);
@@ -127,6 +128,13 @@ body {
 .form-group {
 	margin-bottom: 28px;
 }
+/* ADDED: Styling for the form action button group */
+.form-action-group {
+    margin-top: 32px;
+    padding-top: 24px;
+    border-top: 1px solid var(--border-color);
+    margin-bottom: 0; /* Override default form-group margin */
+}
 .form-label {
 	display: block;
 	font-weight: 600;
@@ -164,13 +172,10 @@ body {
 	border: 2px solid white;
 	box-shadow: var(--shadow);
 }
-/* REMOVED .range-value class */
-
-/* CORRECTED: Styles for combined range slider and number input */
 .range-input-wrapper {
 	display: flex;
 	align-items: center;
-	gap: 12px; /* Reduced gap for a tighter look */
+	gap: 12px;
 	margin-top: 4px;
 }
 .range-input-wrapper .form-range {
@@ -191,11 +196,11 @@ body {
 	box-shadow: 0 0 0 2px var(--primary-color-light);
 }
 .range-number-input {
-	width: 48px; /* Fine-tuned width */
+	width: 48px;
 	border: none;
 	outline: none;
-	padding: 6px 0 6px 6px; /* Adjusted padding, especially left */
-	text-align: center; /* Centered text is better for varying digit counts */
+	padding: 6px 0 6px 6px;
+	text-align: center;
 	font-family: var(--font-family);
 	font-size: 0.9rem;
 	font-weight: 500;
@@ -214,7 +219,7 @@ body {
 	font-size: 0.9rem;
 	font-weight: 500;
 	color: var(--medium-text);
-	padding: 0 10px 0 2px; /* Adjusted padding to bring unit closer */
+	padding: 0 10px 0 2px;
 }
 
 .segmented-control {
@@ -320,6 +325,28 @@ body {
 	border-color: transparent;
 }
 
+/* ADDED: Secondary button style for the reset button */
+.button-secondary {
+    width: 100%;
+    background-color: #fff;
+    color: var(--medium-text);
+    border: 1px solid var(--border-color);
+    padding: 10px 16px;
+    border-radius: var(--border-radius);
+    font-weight: 600;
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: all 0.2s;
+    text-align: center;
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.05);
+}
+
+.button-secondary:hover {
+    background-color: var(--bg-color);
+    border-color: #d1d5db;
+    color: var(--dark-text);
+}
+
 
 /* ===== DROP ZONE & FILE LIST ===== */
 .drop-zone {
@@ -373,6 +400,7 @@ body {
 	margin-top: 12px;
 }
 
+/* Other styles remain unchanged... */
 /* ===== FILE ITEM CARD ===== */
 .file-item {
 	background-color: var(--panel-bg-color);
@@ -554,7 +582,6 @@ body {
 	}
 }
 
-/* ADDED: Styles for the global error banner */
 .error-banner {
     background-color: var(--error-color);
     color: white;

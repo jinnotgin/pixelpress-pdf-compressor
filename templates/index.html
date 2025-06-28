@@ -83,7 +83,6 @@
 								<label for="dpi" class="form-label-small"
 									>Resolution (DPI)</label
 								>
-								<!-- UPDATED: DPI input group -->
 								<div class="range-input-wrapper">
 									<input
 										type="range"
@@ -134,7 +133,6 @@
 								<label for="jpeg_quality" class="form-label-small"
 									>JPEG Quality</label
 								>
-								<!-- UPDATED: JPEG Quality input group -->
 								<div class="range-input-wrapper">
 									<input
 										type="range"
@@ -160,6 +158,12 @@
 								</div>
 							</div>
 						</div>
+                        <!-- MOVED: Reset button to end of form -->
+                        <div class="form-action-group">
+                            <button type="button" id="reset-settings-btn" class="button-secondary">
+                                Reset to Default
+                            </button>
+                        </div>
 					</form>
 				</div>
 
@@ -175,7 +179,8 @@
 
 			<!-- ===== CONTENT PANEL (RIGHT) ===== -->
 			<main class="content-panel">
-				<div class="content-header">
+				<!-- Content panel remains unchanged -->
+                <div class="content-header">
 					<h2 id="content-title">Uploads</h2>
 					<div class="header-actions">
 						<button id="add-files-btn" class="button-primary">
@@ -220,7 +225,6 @@
 					</div>
 				</div>
 
-				<!-- ADDED: Global Error Banner for persistent messages like server down -->
 				<div
 					id="global-error-banner"
 					class="error-banner"
