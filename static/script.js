@@ -65,11 +65,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }
         renderFileList();
         
-        checkServerHealth().then(() => {
-            if (isServerReachable) {
-                processFileQueue();
-            }
-        });
+        processFileQueue();
     }
     
     // --- Server Health & Error Handling ---
