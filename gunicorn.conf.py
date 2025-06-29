@@ -1,7 +1,7 @@
 import os
 import threading
 from monitor import monitor_loop
-from app import init_db  # <-- ADD THIS LINE to import the function
+from app import init_db 
 
 # --- Gunicorn Configuration ---
 
@@ -33,13 +33,13 @@ max_requests = 1
 # max_requests_jitter = 5 # Add randomness to avoid all workers restarting simultaneously.
 
 # Logging
-accesslog = "-"  # Log access to stdout
+# accesslog = "-"  # Log access to stdout
+# access_log_format = '%(h)s %(l)s %(u)s %(t)s "%(r)s" %(s)s %(b)s "%(f)s" "%(a)s"'
 errorlog = "-"   # Log errors to stderr
-loglevel = "info"
-access_log_format = '%(h)s %(l)s %(u)s %(t)s "%(r)s" %(s)s %(b)s "%(f)s" "%(a)s"'
+loglevel = "warning"
 
 # Change the process name for easier identification.
-proc_name = "pdf_processor_app"
+proc_name = "pixelpress_app"
 
 # Ensure Gunicorn runs in the correct directory.
 chdir = bind_dir
