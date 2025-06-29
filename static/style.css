@@ -27,7 +27,7 @@ body {
 	background-color: var(--bg-color);
 	color: var(--dark-text);
 	display: flex;
-	height: 100vh;
+	height: 100svh;
 	overflow: hidden; /* Prevent body scroll on desktop */
 }
 
@@ -196,7 +196,7 @@ body {
 	box-shadow: 0 0 0 2px var(--primary-color-light);
 }
 .range-number-input {
-	width: 48px;
+	width: 42px;
 	border: none;
 	outline: none;
 	padding: 6px 0 6px 6px;
@@ -628,7 +628,7 @@ body {
 		display: none;
 	}
 	.content-panel {
-		height: calc(100vh - 85px);
+		height: calc(100svh - 85px);
 		min-height: 400px;
 		padding: 16px;
 	}
