@@ -3,3 +3,4 @@ PyMuPDF
 Werkzeug>=2.3.0 # Ensure compatibility for send_from_directory and secure_filename
 Pillow
 gunicorn
+psutil
