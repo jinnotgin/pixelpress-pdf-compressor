@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
-import gc # For explicit garbage collection
-import sys # Ensure sys is imported
+import gc
+import sys
 import fitz  # PyMuPDF
 import os
 import math
@@ -9,9 +9,9 @@ import uuid
 import threading
 import time
 import logging
-import sqlite3 # For SQLite database
-import tempfile # For temporary directory management
-from flask import Flask, request, jsonify, render_template, send_from_directory, url_for, abort
+import sqlite3
+import tempfile
+from flask import Flask, request, jsonify, render_template, send_from_directory, abort
 from werkzeug.utils import secure_filename
 from concurrent.futures import ThreadPoolExecutor
 
@@ -44,7 +44,7 @@ DATABASE_FILE = 'tasks.db' # SQLite database file
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['PROCESSED_FOLDER'] = PROCESSED_FOLDER
-app.config['MAX_CONTENT_LENGTH'] = 250 * 1024 * 1024  # 200 MB limit
+app.config['MAX_CONTENT_LENGTH'] = 250 * 1024 * 1024  # 250 MB limit
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(threadName)s - %(message)s')
@@ -53,7 +53,7 @@ for handler in logging.getLogger().handlers:
     handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(threadName)s - %(message)s'))
 app.logger.setLevel(logging.INFO)
 
-# --- MODIFIED: Tiling Configuration via Environment Variable ---
+# --- Tiling Configuration ---
 try:
     TILE_SIZE_PX = int(os.environ.get("PDF_TILE_SIZE_PX", "9600"))
     if TILE_SIZE_PX < 1024:
@@ -70,7 +70,7 @@ os.makedirs(PROCESSED_FOLDER, exist_ok=True)
 
 # --- SQLite Database Setup ---
 def get_db_connection():
-    conn = sqlite3.connect(DATABASE_FILE, timeout=10)
+    conn = sqlite3.connect(DATABASE_FILE, timeout=10, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -97,7 +97,9 @@ def init_db():
                 processed_size_bytes INTEGER,
                 timestamp_created REAL NOT NULL,
                 timestamp_last_updated REAL,
-                cancellation_requested INTEGER DEFAULT 0
+                cancellation_requested INTEGER DEFAULT 0,
+                worker_pid INTEGER,
+                heartbeat_timestamp REAL
             )
         ''')
         conn.commit()
@@ -110,36 +112,38 @@ def init_db():
             'processed_size_bytes': "ALTER TABLE task_status ADD COLUMN processed_size_bytes INTEGER;",
             'output_target_format': "ALTER TABLE task_status ADD COLUMN output_target_format TEXT;",
             'cancellation_requested': "ALTER TABLE task_status ADD COLUMN cancellation_requested INTEGER DEFAULT 0;",
+            'worker_pid': "ALTER TABLE task_status ADD COLUMN worker_pid INTEGER;",
+            'heartbeat_timestamp': "ALTER TABLE task_status ADD COLUMN heartbeat_timestamp REAL;"
         }
-        
+
+        # Legacy column migration example
         if 'image_format' in column_names and 'page_raster_format' not in column_names:
             try:
-                cursor.execute("ALTER TABLE task_status ADD COLUMN page_raster_format TEXT;")
+                cursor.execute("ALTER TABLE task_status RENAME COLUMN image_format TO page_raster_format;")
                 conn.commit()
-                app.logger.info("Added 'page_raster_format' column to task_status table. If old 'image_format' column exists, it is now legacy.")
+                app.logger.info("Renamed 'image_format' to 'page_raster_format' in task_status table.")
             except sqlite3.Error as e_alter:
                 if "duplicate column name" not in str(e_alter).lower():
-                    app.logger.error(f"Error adding 'page_raster_format' column: {e_alter}")
+                    app.logger.error(f"Error renaming column: {e_alter}")
 
         for col_name, alter_sql in migrations.items():
             if col_name not in column_names:
                 try:
                     cursor.execute(alter_sql)
                     conn.commit()
-                    app.logger.info(f"Added '{col_name}' column to task_status table.")
+                    app.logger.info(f"DB Migration: Added '{col_name}' column to task_status table.")
                 except sqlite3.Error as e_alter:
-                    app.logger.error(f"Error adding '{col_name}' column: {e_alter}")
-        
+                    app.logger.error(f"DB Migration Error adding '{col_name}' column: {e_alter}")
+
         app.logger.info("Database initialized successfully.")
     except sqlite3.Error as e:
         app.logger.error(f"Database initialization error: {e}", exc_info=True)
     finally:
-        if conn:
-            conn.close()
+        if conn: conn.close()
 
 # Let the parallelism happen at the Gunicorn worker level, not within the process.
 MAX_PDF_WORKERS = 1
-app.logger.info(f"Initializing PDF processor with {MAX_PDF_WORKERS} max workers.")
+app.logger.info(f"Initializing PDF processor with {MAX_PDF_WORKERS} max workers per Flask worker.")
 pdf_processor_executor = ThreadPoolExecutor(max_workers=MAX_PDF_WORKERS, thread_name_prefix="PDFWorker")
 
 
@@ -163,7 +167,7 @@ def check_cancellation(task_id):
         if conn: conn.close()
 
 def cleanup_and_delete_task_record(task_id):
-    """Removes files and the database entry for a given task_id."""
+    """Removes files and the database entry for a given task_id. (Used by monitor and DELETE route)"""
     conn = None
     try:
         conn = get_db_connection()
@@ -172,6 +176,7 @@ def cleanup_and_delete_task_record(task_id):
         task_row = cursor.fetchone()
 
         if task_row:
+            # Clean up associated files first
             paths_to_clean = filter(None, [task_row['input_path'], task_row['output_path']])
             for file_path in paths_to_clean:
                 if os.path.exists(file_path):
@@ -181,6 +186,7 @@ def cleanup_and_delete_task_record(task_id):
                     except OSError as e:
                         app.logger.error(f"Cleanup: Error removing file {file_path} for task {task_id}: {e}")
 
+            # Delete the record from DB
             cursor.execute("DELETE FROM task_status WHERE task_id = ?", (task_id,))
             conn.commit()
             app.logger.info(f"Cleanup: Removed task record {task_id} from DB.")
@@ -192,25 +198,28 @@ def cleanup_and_delete_task_record(task_id):
     finally:
         if conn: conn.close()
 
-
 def update_task_in_db(task_id, status=None, message=None, progress=None,
-                      original_size_bytes_val=None, processed_size_bytes_val=None):
+                      original_size_bytes_val=None, processed_size_bytes_val=None,
+                      worker_pid=None, update_heartbeat=False):
     conn = None
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
         fields_to_update = []
         params = []
+        current_time = time.time()
 
         if status is not None: fields_to_update.append("status = ?"); params.append(status)
         if message is not None: fields_to_update.append("message = ?"); params.append(message)
         if progress is not None: fields_to_update.append("progress = ?"); params.append(progress)
         if original_size_bytes_val is not None: fields_to_update.append("original_size_bytes = ?"); params.append(original_size_bytes_val)
         if processed_size_bytes_val is not None: fields_to_update.append("processed_size_bytes = ?"); params.append(processed_size_bytes_val)
+        if worker_pid is not None: fields_to_update.append("worker_pid = ?"); params.append(worker_pid)
+        if update_heartbeat: fields_to_update.append("heartbeat_timestamp = ?"); params.append(current_time)
 
         if not fields_to_update: return
 
-        fields_to_update.append("timestamp_last_updated = ?"); params.append(time.time())
+        fields_to_update.append("timestamp_last_updated = ?"); params.append(current_time)
         query = f"UPDATE task_status SET {', '.join(fields_to_update)} WHERE task_id = ?"; params.append(task_id)
         cursor.execute(query, tuple(params))
         conn.commit()
@@ -219,30 +228,34 @@ def update_task_in_db(task_id, status=None, message=None, progress=None,
     finally:
         if conn: conn.close()
 
+
 def process_pdf_task(task_id, input_pdf_path, output_file_path, dpi,
                      original_input_filename,
                      page_raster_format, jpeg_raster_quality,
                      output_target_format):
-    # --- Initial Cancellation Check ---
+
+    # --- Task Start: Announce PID and Initial Heartbeat ---
+    worker_pid = os.getpid()
+    app.logger.info(f"Task {task_id} starting on worker PID {worker_pid}.")
+    update_task_in_db(task_id, status='processing', worker_pid=worker_pid, update_heartbeat=True)
+
     if check_cancellation(task_id):
         app.logger.info(f"Task {task_id} was cancelled before processing started.")
         cleanup_and_delete_task_record(task_id)
         return
 
     app.logger.info(
-        f"Task {task_id} ({original_input_filename}) starting processing. Target: {output_target_format.upper()}. "
+        f"Task {task_id} ({original_input_filename}) processing. Target: {output_target_format.upper()}. "
         f"DPI: {dpi}, Page Raster Format: {page_raster_format}, "
         f"JPEG Quality: {jpeg_raster_quality if page_raster_format == 'jpeg' else 'N/A'}. "
         f"Thread: {threading.current_thread().name}"
     )
-    update_task_in_db(task_id, status='processing', message='Preparing: Opening your PDF...', progress=5)
+    update_task_in_db(task_id, message='Preparing: Opening your PDF...', progress=5, update_heartbeat=True)
 
     original_size = None
     processed_size = None
     input_doc = None
     output_doc_for_pdf = None
-
-    # --- REMOVED: Tiling configuration moved to module level ---
 
     with tempfile.TemporaryDirectory(prefix=f"pdftask_{task_id}_") as temp_processing_dir:
         app.logger.info(f"Task {task_id}: Using temporary directory {temp_processing_dir} for intermediate files.")
@@ -250,7 +263,6 @@ def process_pdf_task(task_id, input_pdf_path, output_file_path, dpi,
 
         try:
             if not os.path.exists(input_pdf_path):
-                # No cleanup needed as input file doesn't exist; just update status
                 update_task_in_db(task_id, status='failed', message="Error: Input PDF was not found on server.")
                 app.logger.error(f"Task {task_id}: Input PDF {input_pdf_path} not found.")
                 return
@@ -264,7 +276,6 @@ def process_pdf_task(task_id, input_pdf_path, output_file_path, dpi,
             num_pages = len(input_doc)
 
             if num_pages == 0:
-                # Same logic for 0-page PDFs
                 if output_target_format == 'pdf':
                     output_doc_for_pdf = fitz.open()
                     output_doc_for_pdf.save(output_file_path, garbage=4, deflate=True, clean=True)
@@ -279,7 +290,7 @@ def process_pdf_task(task_id, input_pdf_path, output_file_path, dpi,
                 app.logger.error(f"Task {task_id}: Pillow not installed, cannot create combined image target.")
                 return
 
-            update_task_in_db(task_id, message=f"Processing: Analyzing {num_pages} pages...", progress=10)
+            update_task_in_db(task_id, message=f"Processing: Analyzing {num_pages} pages...", progress=10, update_heartbeat=True)
 
             if output_target_format == 'pdf':
                 output_doc_for_pdf = fitz.open()
@@ -291,7 +302,7 @@ def process_pdf_task(task_id, input_pdf_path, output_file_path, dpi,
                     return
 
                 current_page_progress = int(80 * ((page_num + 1) / num_pages))
-                update_task_in_db(task_id, progress=(10 + current_page_progress), message=f"Rasterizing: Page {page_num + 1} of {num_pages}...")
+                update_task_in_db(task_id, progress=(10 + current_page_progress), message=f"Rasterizing: Page {page_num + 1} of {num_pages}...", update_heartbeat=True)
 
                 page_instance = None
                 try:
@@ -300,7 +311,6 @@ def process_pdf_task(task_id, input_pdf_path, output_file_path, dpi,
                     matrix = fitz.Matrix(zoom, zoom)
 
                     if output_target_format == 'pdf':
-                        # --- MODIFIED: Always use Tiling for PDF Output ---
                         page_rect = page_instance.rect
                         new_page = output_doc_for_pdf.new_page(width=page_rect.width, height=page_rect.height)
                         page_pixel_width = page_rect.width * zoom
@@ -313,7 +323,7 @@ def process_pdf_task(task_id, input_pdf_path, output_file_path, dpi,
                         num_tiles_y = math.ceil(page_pixel_height / TILE_SIZE_PX)
                         total_tiles = num_tiles_x * num_tiles_y
                         processed_tiles = 0
-                        
+
                         for y_tile in range(num_tiles_y):
                             for x_tile in range(num_tiles_x):
                                 if check_cancellation(task_id):
@@ -322,7 +332,7 @@ def process_pdf_task(task_id, input_pdf_path, output_file_path, dpi,
                                     return
 
                                 processed_tiles += 1
-                                update_task_in_db(task_id, message=f"Rasterizing Page {page_num + 1}: Tile {processed_tiles}/{total_tiles}...")
+                                update_task_in_db(task_id, message=f"Rasterizing Page {page_num + 1}: Tile {processed_tiles}/{total_tiles}...", update_heartbeat=True)
                                 app.logger.info(f"Task {task_id}: Rasterizing Page {page_num + 1}: Tile {processed_tiles}/{total_tiles}...")
 
                                 x0 = (x_tile * TILE_SIZE_PX) / zoom; y0 = (y_tile * TILE_SIZE_PX) / zoom
@@ -355,12 +365,6 @@ def process_pdf_task(task_id, input_pdf_path, output_file_path, dpi,
                             update_task_in_db(task_id, status='failed', message=error_msg)
                             app.logger.error(f"Task {task_id}: {error_msg}", exc_info=True)
                             return
-
-                except Exception as e_page:
-                    error_msg = f"Error processing page {page_num + 1}: {str(e_page)[:100]}..."
-                    update_task_in_db(task_id, status='failed', message=error_msg)
-                    app.logger.error(f"Task {task_id} failed on page {page_num + 1}: {e_page}", exc_info=True)
-                    return # Worker will exit, files cleaned up by main cleanup or cancellation
                 finally:
                     if page_instance: page_instance.clean_contents(); page_instance = None
 
@@ -370,7 +374,7 @@ def process_pdf_task(task_id, input_pdf_path, output_file_path, dpi,
                 return
 
             if output_target_format == 'pdf':
-                update_task_in_db(task_id, progress=95, message="Finalizing: Saving new PDF...")
+                update_task_in_db(task_id, progress=95, message="Finalizing: Saving new PDF...", update_heartbeat=True)
                 output_doc_for_pdf.save(output_file_path, garbage=4, deflate=True, deflate_images=True, clean=True)
 
             elif output_target_format == 'image':
@@ -378,7 +382,7 @@ def process_pdf_task(task_id, input_pdf_path, output_file_path, dpi,
                     update_task_in_db(task_id, status='failed', message="Error: No page images were created.")
                     return
 
-                update_task_in_db(task_id, progress=95, message="Finalizing: Stitching images...")
+                update_task_in_db(task_id, progress=95, message="Finalizing: Stitching images...", update_heartbeat=True)
                 pil_page_images, final_image_pil = [], None
                 try:
                     actual_max_width, actual_total_height = 0, 0
@@ -387,12 +391,12 @@ def process_pdf_task(task_id, input_pdf_path, output_file_path, dpi,
                             app.logger.info(f"Task {task_id} cancelled by user during image stitching.")
                             cleanup_and_delete_task_record(task_id)
                             return
-                        update_task_in_db(task_id, message=f"Stitching: Loading page {i + 1}...")
+                        update_task_in_db(task_id, message=f"Stitching: Loading page {i + 1}...", update_heartbeat=True)
                         img = Image.open(temp_file_path)
                         pil_page_images.append(img)
                         actual_max_width = max(actual_max_width, img.width)
                         actual_total_height += img.height
-                    
+
                     if actual_max_width == 0 or actual_total_height == 0:
                         update_task_in_db(task_id, status='failed', message="Error: Calculated image dimensions are zero.")
                         return
@@ -400,10 +404,10 @@ def process_pdf_task(task_id, input_pdf_path, output_file_path, dpi,
                     final_image_pil = Image.new('RGB', (actual_max_width, actual_total_height), (255, 255, 255))
                     current_y_offset = 0
                     for i, pil_img_to_paste in enumerate(pil_page_images):
-                        update_task_in_db(task_id, message=f"Stitching: Pasting page {i + 1}...")
+                        update_task_in_db(task_id, message=f"Stitching: Pasting page {i + 1}...", update_heartbeat=True)
                         final_image_pil.paste(pil_img_to_paste, (0, current_y_offset))
                         current_y_offset += pil_img_to_paste.height
-                    
+
                     save_params_pil = {}
                     if page_raster_format == 'jpeg': save_params_pil.update({'quality': jpeg_raster_quality, 'optimize': True})
                     final_image_pil.save(output_file_path, **save_params_pil)
@@ -428,17 +432,11 @@ def process_pdf_task(task_id, input_pdf_path, output_file_path, dpi,
             app.logger.error(f"Task {task_id} critical error: {e_main}", exc_info=True)
             return
         finally:
-            if input_doc:
-                input_doc.close()
-                del input_doc
-            if output_doc_for_pdf:
-                output_doc_for_pdf.close()
-                del output_doc_for_pdf
-            
-            # Final garbage collection call for the whole task
+            if input_doc: input_doc.close()
+            if output_doc_for_pdf: output_doc_for_pdf.close()
             gc.collect()
 
-    if os.path.exists(input_pdf_path): 
+    if os.path.exists(input_pdf_path):
         try:
             os.remove(input_pdf_path)
             app.logger.info(f"Cleaned up input file: {input_pdf_path} for task {task_id}.")
@@ -451,7 +449,6 @@ def index():
 
 @app.route('/health')
 def health_check():
-    """A simple endpoint to confirm the server is running."""
     return jsonify({'status': 'ok'}), 200
 
 @app.route('/upload', methods=['POST'])
@@ -537,7 +534,7 @@ def download_file_route(task_id):
     if not task_row: return jsonify({'error': 'Task not found or has been cleaned up.'}), 404
     if task_row['status'] != 'completed': return jsonify({'error': task_row['message'] or 'File is not ready or processing failed.'}), 400
     if not task_row['user_facing_output_filename'] or not task_row['output_path']: return jsonify({'error': 'Output file details incomplete.'}), 500
-    
+
     actual_disk_filename = os.path.basename(task_row['output_path'])
     if not os.path.exists(os.path.join(app.config['PROCESSED_FOLDER'], actual_disk_filename)):
         update_task_in_db(task_id, status='failed', message='Error: Processed file missing on server.')
@@ -550,12 +547,6 @@ def download_file_route(task_id):
 
 @app.route('/task/<task_id>', methods=['DELETE'])
 def delete_task(task_id):
-    """
-    Deletes a completed/failed task or requests cancellation for an active task.
-    - If task is 'completed' or 'failed', it's deleted immediately.
-    - If task is 'queued' or 'processing', it's flagged for cancellation.
-    The worker thread will then handle the cleanup and final deletion.
-    """
     conn = get_db_connection()
     task_row = conn.execute("SELECT status FROM task_status WHERE task_id = ?", (task_id,)).fetchone()
     if not task_row:
@@ -569,7 +560,7 @@ def delete_task(task_id):
             return jsonify({'message': f'Task {task_id} has been deleted.'}), 200
         else:
             return jsonify({'error': 'Failed to delete task resources.'}), 500
-    
+
     elif status in ['queued', 'processing']:
         try:
             conn.execute("""
@@ -589,63 +580,24 @@ def delete_task(task_id):
         conn.close()
         return jsonify({'message': f'Task {task_id} is already being cancelled.'}), 202
 
-
-def cleanup_old_tasks():
-    while True:
-        time.sleep(3600) 
-        app.logger.info("Running hourly cleanup task...")
-        conn = None
-        try:
-            conn = get_db_connection()
-            # cleanup_threshold_seconds = float(os.environ.get("CLEANUP_AFTER_HOURS", 2)) * 3600
-            cleanup_threshold_seconds = float(os.environ.get("CLEANUP_AFTER_HOURS", 72)) * 3600
-            older_than_timestamp = time.time() - cleanup_threshold_seconds
-
-            tasks_to_remove = conn.execute("""
-                SELECT task_id FROM task_status
-                WHERE status IN ('completed', 'failed') AND timestamp_last_updated < ?
-            """, (older_than_timestamp,)).fetchall()
-
-            deleted_count = 0
-            if not tasks_to_remove:
-                app.logger.info("Cleanup: No old tasks met criteria for removal.")
-            else:
-                for task_row in tasks_to_remove:
-                    task_id = task_row['task_id']
-                    if cleanup_and_delete_task_record(task_id):
-                        deleted_count += 1
-            
-            if deleted_count > 0:
-                app.logger.info(f"Cleanup finished. Removed {deleted_count} old task(s).")
-            else:
-                app.logger.info("Cleanup finished. No tasks were eligible for removal in this pass.")
-
-        except sqlite3.Error as e:
-            app.logger.error(f"Cleanup: Database error during cleanup: {e}", exc_info=True)
-        except Exception as e:
-            app.logger.error(f"Cleanup: General error during cleanup: {e}", exc_info=True)
-        finally:
-            if conn: conn.close()
-
+# The cleanup logic is now in monitor.py and started by gunicorn.conf.py
+# This ensures it only runs ONCE for the entire application.
+# The code block below is left for context during `flask run` but is not used by Gunicorn.
 if __name__ == '__main__':
     init_db()
     if Image is None:
         app.logger.warning("Pillow library is not installed. Functionality to output combined images will be disabled.")
-    
-    cleanup_thread = threading.Thread(target=cleanup_old_tasks, daemon=True, name="CleanupThread")
-    cleanup_thread.start()
-    app.logger.info("Cleanup thread started.")
 
+    # In a simple `flask run` scenario, a monitor isn't running.
+    # For development, you might want to run monitor.py in a separate terminal.
     app.logger.info("Starting Flask development server...")
-    app.run(debug=False, host='0.0.0.0', port=7001, threaded=True) 
-else: 
+    app.logger.warning("NOTE: The worker monitor/cleanup service does not run in this mode.")
+    app.logger.warning("For production, use Gunicorn via 'run.sh'.")
+
+    app.run(debug=False, host='0.0.0.0', port=7001)
+else:
+    # This block runs when Gunicorn imports the app.
+    # We initialize the DB for each worker process.
     init_db()
     if Image is None and os.environ.get("WERKZEUG_RUN_MAIN") != "true":
         app.logger.warning("Pillow library is not installed. Functionality to output combined images will be disabled in this worker.")
-
-    if os.environ.get("WERKZEUG_RUN_MAIN") != "true": 
-        if not hasattr(app, '_cleanup_thread_started_gunicorn_process'):
-            cleanup_thread_gunicorn = threading.Thread(target=cleanup_old_tasks, daemon=True, name=f"CleanupThread-GunicornPID-{os.getpid()}")
-            cleanup_thread_gunicorn.start()
-            app._cleanup_thread_started_gunicorn_process = True
-            app.logger.info(f"Cleanup thread started in Gunicorn worker process PID {os.getpid()}.")

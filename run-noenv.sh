@@ -1,41 +1,25 @@
 #!/bin/bash
+#
+# run-noenv.sh: Starts the Gunicorn server for the PDF processing app.
+# - Assumes 'python3' and 'gunicorn' are in the system PATH.
+# - Uses gunicorn.conf.py for all configuration, including the worker monitor.
+# - Works when run from terminal or double-clicked.
 
-# --- Configuration ---
+# --- Configuration & Environment Setup ---
 # Get the absolute path of the directory where this script is located.
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
-
 PORT=7001
-HOST="0.0.0.0"
-APP_MODULE="app:app"
-TIMEOUT=1200
 LOG_FILE="$SCRIPT_DIR/gunicorn.log"
-
-# This will hold the Process ID (PID) of the background pipeline.
 PIPELINE_PID=""
-
-# --- NEW: Gunicorn Worker Configuration (from run.sh) ---
-# This enables true parallel processing by using multiple worker processes,
-# getting around the limitations of Python's Global Interpreter Lock (GIL).
-
-# 1. Automatically detect CPU cores. Fallback to 2 if undetected.
-CPU_COUNT=$(python3 -c 'import os; print(os.cpu_count() or 2)')
-
-# 2. Set smart defaults for workers and threads.
-DEFAULT_WORKERS=$CPU_COUNT
-WORKERS=${GUNICORN_WORKERS:-$DEFAULT_WORKERS}
-# THREADS=${GUNICORN_THREADS:-2}
-WORKER_CLASS="gthread"
-WORKER_MAX_REQUEST_BEFORE_TERMINATE=1
-# WORKER_MAX_REQUEST_JITTER=10
 
 
 # --- Shutdown Function ---
 shutdown_server() {
-    echo "" # Add a newline for cleaner output
+    echo ""
     echo "🛑 Initiating shutdown..."
     if [ -n "$PIPELINE_PID" ] && ps -p "$PIPELINE_PID" > /dev/null; then
         echo "   Killing process group (PID: $PIPELINE_PID)..."
-        # Kill the entire process group to ensure both gunicorn and tee are stopped.
+        # Use kill with the PID to terminate the entire process group started by Gunicorn.
         kill "$PIPELINE_PID"
         wait "$PIPELINE_PID" 2>/dev/null
         echo "✅ Server stopped."
@@ -46,15 +30,14 @@ shutdown_server() {
 }
 
 # --- Trap Signals ---
-# On SIGINT (Ctrl+C) or SIGTERM, call the shutdown_server function.
 trap 'shutdown_server' SIGINT SIGTERM
 
 # --- Main Script ---
 
-# --- NEW: Pre-flight Checks ---
+# --- Pre-flight Checks ---
 echo "--> Verifying environment..."
 if ! command -v python3 &> /dev/null; then
-    echo "❌ Error: 'python3' is not in your PATH. It is required to detect CPU cores."
+    echo "❌ Error: 'python3' is not in your PATH. It is required for the application."
     exit 1
 fi
 if ! command -v gunicorn &> /dev/null; then
@@ -62,41 +45,28 @@ if ! command -v gunicorn &> /dev/null; then
     echo "   Please install it first (e.g., 'pip install gunicorn')."
     exit 1
 fi
+if [ ! -f "$SCRIPT_DIR/gunicorn.conf.py" ]; then
+    echo "❌ Error: Configuration file 'gunicorn.conf.py' not found in script directory."
+    exit 1
+fi
 echo "✅ Environment checks passed."
 echo ""
 
-# Clear the log file from the previous run.
+# --- Execution ---
 echo "📝 Clearing previous log file: $LOG_FILE"
 > "$LOG_FILE"
 
-echo "🚀 Starting Gunicorn server..."
-# --- MODIFIED: Added worker info to startup message ---
-echo "   Host: $HOST | Port: $PORT"
-echo "   Worker Processes: $WORKERS | Threads per Worker: $THREADS (Class: $WORKER_CLASS)"
+echo "🚀 Starting Gunicorn server from directory: $SCRIPT_DIR"
+echo "   All configuration is loaded from 'gunicorn.conf.py'."
 echo "   Logs will be streamed here and also saved to '$LOG_FILE'."
 
-# --- MODIFIED: Gunicorn command now includes worker/thread configuration ---
+# The command is now simpler and more robust, delegating configuration to the .py file.
 # Using 'gunicorn' directly, assuming it's in the system PATH.
-# Use --chdir to ensure Gunicorn runs in the correct project directory.
-gunicorn \
-    --workers "$WORKERS" \
-    --worker-class "$WORKER_CLASS" \
-    --max-requests "$WORKER_MAX_REQUEST_BEFORE_TERMINATE" \
-    --chdir "$SCRIPT_DIR" \
-    --timeout "$TIMEOUT" \
-    --bind "$HOST:$PORT" \
-    "$APP_MODULE" 2>&1 | tee "$LOG_FILE" &
+gunicorn --config gunicorn.conf.py app:app 2>&1 | tee "$LOG_FILE" &
 
-    # --threads "$THREADS" \
-    # --max-requests-jitter "$WORKER_MAX_REQUEST_JITTER" \
-
-# Capture the PID of the last command in the pipeline (tee)
 PIPELINE_PID=$!
-
-# Give Gunicorn a moment to start or fail
 sleep 1
 
-# Check if the process is still running. If not, it likely failed to start.
 if ! ps -p "$PIPELINE_PID" > /dev/null; then
     echo "❌ Gunicorn failed to start. Review '$LOG_FILE' for errors."
     exit 1
@@ -106,25 +76,22 @@ echo "✅ Gunicorn is starting up (PID: $PIPELINE_PID)..."
 echo -n "   Waiting for server to become available on port $PORT"
 
 # Robustly wait for the port to be open
-while ! nc -z localhost "$PORT"; do
+while ! nc -z localhost "$PORT" 2>/dev/null; do
   sleep 0.1
   echo -n "."
 done
 
-echo "" # Newline after the dots
+echo ""
 echo "🌍 Server is ready! Launching browser at http://localhost:$PORT"
-
-# --- MODIFIED: Cross-platform browser opening ---
+# Use 'open' on macOS, 'xdg-open' on Linux
 if command -v open &> /dev/null; then
-  open "http://localhost:$PORT" # macOS
+  open "http://localhost:$PORT"
 elif command -v xdg-open &> /dev/null; then
-  xdg-open "http://localhost:$PORT" # Linux
+  xdg-open "http://localhost:$PORT"
 fi
 
 echo ""
 echo "✨ Server is running. Press Ctrl+C in this terminal to shut down."
 
-# The 'wait' command is crucial. It pauses the script here and waits for the
-# background pipeline to finish. This keeps the script alive so it can catch
-# the Ctrl+C signal.
+# Wait for the background Gunicorn process to exit. This is crucial for the trap to work.
 wait "$PIPELINE_PID"

@@ -1,46 +1,21 @@
 #!/bin/bash
 #
 # run.sh: Starts the Gunicorn server for the PDF processing app.
-# - Automatically detects CPU cores for optimal worker processes.
-# - Uses multi-process workers to bypass the Python GIL for true concurrency.
+# - Uses a gunicorn.conf.py for all configuration.
 # - Works when run from terminal or double-clicked.
 
 # --- Configuration & Environment Setup ---
 # Get the absolute path of the directory where this script is located.
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+PORT=7001
 
-# Set all paths relative to the script's location for robustness.
-# NOTE: This assumes a pyenv virtual environment named after the project folder.
 # Adjust VENV_PATH if you use a different venv manager (e.g., a local 'venv' folder).
 VENV_NAME=$(basename "$SCRIPT_DIR")
 VENV_PATH="$HOME/.pyenv/versions/$VENV_NAME"
 GUNICORN_CMD="$VENV_PATH/bin/gunicorn"
 
-PORT=7001
-HOST="0.0.0.0"
-APP_MODULE="app:app"
-TIMEOUT=1200
 LOG_FILE="$SCRIPT_DIR/gunicorn.log"
-
 PIPELINE_PID=""
-
-
-# --- NEW: Gunicorn Worker Configuration ---
-# This section enables true parallel processing by using multiple worker processes,
-# which gets around the limitations of Python's Global Interpreter Lock (GIL).
-
-# 1. Automatically detect the number of available CPU cores. Fallback to 2 if undetected.
-CPU_COUNT=$(python3 -c 'import os; print(os.cpu_count() or 2)')
-
-# 2. Set smart defaults. A common starting point for gthread workers is (num_cores).
-#    You can override these with environment variables, e.g.,
-#    `GUNICORN_WORKERS=4 GUNICORN_THREADS=2 ./run.sh`
-DEFAULT_WORKERS=$CPU_COUNT
-WORKERS=${GUNICORN_WORKERS:-$DEFAULT_WORKERS}
-# THREADS=${GUNICORN_THREADS:-2}
-WORKER_CLASS="gthread"
-WORKER_MAX_REQUEST_BEFORE_TERMINATE=1
-# WORKER_MAX_REQUEST_JITTER=10
 
 
 # --- Shutdown Function ---
@@ -66,11 +41,6 @@ trap 'shutdown_server' SIGINT SIGTERM
 
 # --- Pre-flight Checks ---
 echo "--> Verifying environment..."
-if ! command -v python3 &> /dev/null; then
-    echo "❌ Error: 'python3' is not in your PATH. It is required to detect CPU cores."
-    exit 1
-fi
-
 if [ ! -d "$VENV_PATH" ]; then
     echo "❌ Error: Virtual environment '$VENV_NAME' not found."
     echo "   The expected path was '$VENV_PATH'."
@@ -91,25 +61,12 @@ echo "📝 Clearing previous log file: $LOG_FILE"
 > "$LOG_FILE"
 
 echo "🚀 Starting Gunicorn server from directory: $SCRIPT_DIR"
-# --- MODIFIED: Added worker info to startup message ---
-echo "   Host: $HOST | Port: $PORT"
-echo "   Worker Processes: $WORKERS | Threads per Worker: $THREADS (Class: $WORKER_CLASS)"
+echo "   All configuration is loaded from 'gunicorn.conf.py'."
 echo "   Logs will be streamed here and also saved to '$LOG_FILE'."
 
-# --- MODIFIED: Gunicorn command now includes worker/thread configuration ---
-# Use --chdir to ensure Gunicorn runs in the correct project directory,
-# which is essential when the script is double-clicked.
-"$GUNICORN_CMD" \
-    --workers "$WORKERS" \
-    --worker-class "$WORKER_CLASS" \
-    --max-requests "$WORKER_MAX_REQUEST_BEFORE_TERMINATE" \
-    --chdir "$SCRIPT_DIR" \
-    --timeout "$TIMEOUT" \
-    --bind "$HOST:$PORT" \
-    "$APP_MODULE" 2>&1 | tee "$LOG_FILE" &
-    
-    # --threads "$THREADS" \
-    # --max-requests-jitter "$WORKER_MAX_REQUEST_JITTER" \
+# The command is now much simpler. Gunicorn will automatically find and use gunicorn.conf.py
+# when it's in the same directory (or specified with -c).
+"$GUNICORN_CMD" --config gunicorn.conf.py app:app 2>&1 | tee "$LOG_FILE" &
 
 PIPELINE_PID=$!
 sleep 1
@@ -123,7 +80,7 @@ echo "✅ Gunicorn is starting up (PID: $PIPELINE_PID)..."
 echo -n "   Waiting for server to become available on port $PORT"
 
 # Wait for the port to be open before proceeding
-while ! nc -z localhost "$PORT"; do
+while ! nc -z localhost "$PORT" 2>/dev/null; do
   sleep 0.1
   echo -n "."
 done
