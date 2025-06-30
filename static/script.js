@@ -106,18 +106,28 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
+    // MODIFIED: This function now handles specific HTTP status codes as "offline" events.
     async function handleFetchError(error, item) {
-        if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
-            console.warn("Fetch failed, triggering a server health check.");
+        // List of statuses to treat as a total connection loss (e.g., gateway down, service unavailable).
+        const offlineStatusCodes = [404, 429, 431, 502, 503, 504, 505, 520, 521, 522, 523, 524, 525, 526, 530];
+
+        const isOfflineEvent = 
+            error.message.includes('Failed to fetch') ||
+            error.message.includes('NetworkError') ||
+            (error.status && offlineStatusCodes.includes(error.status));
+
+        if (isOfflineEvent) {
+            console.warn("Fetch failed or received an offline-like status, triggering server health check.", error);
             if (item && ['uploading', 'processing'].includes(item.status)) {
-                // THE FIX: Reset the reconnected flag so it can be picked up again on the next connection.
+                // Reset the item so it can be picked up again upon reconnection.
                 updateItemState(item, {
                     message: "Connection lost. Waiting to reconnect...",
-                    reconnected: false // <<< FIX APPLIED HERE
+                    reconnected: false 
                 });
             }
-            await checkServerHealth();
+            await checkServerHealth(); // This function will set the global offline state.
         } else {
+            // Treat other errors (e.g., 400, 500) as a task-specific failure.
             if (item) {
                 updateItemState(item, { status: 'failed', error: error.message, message: 'An unexpected error occurred' });
             }
@@ -196,7 +206,6 @@ document.addEventListener('DOMContentLoaded', function () {
         if (!currentItem) return;
 
         isCurrentlyProcessingQueueItem = true;
-        updateItemState(currentItem, { status: 'uploading', message: 'Preparing to upload...', progress: 0 });
 
         const formData = new FormData();
         formData.append('pdf_file', currentItem.file);
@@ -205,13 +214,18 @@ document.addEventListener('DOMContentLoaded', function () {
         if (currentItem.settings.pageRasterFormat === 'jpeg') formData.append('jpeg_quality', currentItem.settings.jpegQuality);
         formData.append('output_target_format', currentItem.settings.outputTargetFormat);
 
+        updateItemState(currentItem, { status: 'uploading', message: 'Uploading file...', progress: 0 });
         try {
             const response = await fetch('/upload', { method: 'POST', body: formData });
             currentItem.file = null;
 
             if (!response.ok) {
+                // MODIFIED: Create a custom error with the status code to be handled by handleFetchError.
+                const error = new Error();
+                error.status = response.status;
                 const errorData = await response.json().catch(() => ({}));
-                throw new Error(errorData.error || `Upload failed with status ${response.status}`);
+                error.message = errorData.error || `Upload failed with status ${response.status}`;
+                throw error;
             }
 
             const data = await response.json();
@@ -246,8 +260,12 @@ document.addEventListener('DOMContentLoaded', function () {
             try {
                 const response = await fetch(`/status/${currentItemInPoll.taskId}`, { cache: 'no-store' });
                 if (!response.ok) {
+                    // MODIFIED: Create a custom error with the status code to be handled by handleFetchError.
+                    const error = new Error();
+                    error.status = response.status;
                     const errorData = await response.json().catch(() => ({}));
-                    throw new Error(errorData.message || errorData.error || `Server returned status ${response.status}`);
+                    error.message = errorData.message || errorData.error || `Server returned status ${response.status}`;
+                    throw error;
                 }
 
                 const data = await response.json();
