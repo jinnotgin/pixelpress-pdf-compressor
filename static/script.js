@@ -321,6 +321,9 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     function updateFileItemElement(el, item) {
+        // Helper to get the display text for the format
+        const formatLabel = item.settings.outputTargetFormat.toUpperCase();
+    
         if (item.status === 'completed') {
             el.classList.add('is-completed');
             let sizeInfo = '';
@@ -336,7 +339,10 @@ document.addEventListener('DOMContentLoaded', function () {
                 </a>
                 <div class="file-item-details">
                     <div>
-                        <div class="file-name" title="${item.userFacingOutputFilename}">${item.userFacingOutputFilename}</div>
+                        <div class="file-name-wrapper">
+                            <span class="file-output-format">${formatLabel}</span>
+                            <div class="file-name" title="${item.userFacingOutputFilename}">${item.userFacingOutputFilename}</div>
+                        </div>
                         <div class="file-message">${sizeInfo}</div>
                     </div>
                 </div>
@@ -346,13 +352,20 @@ document.addEventListener('DOMContentLoaded', function () {
                 </div>`;
             return;
         }
-
+    
         el.classList.remove('is-completed');
         el.innerHTML = `
             <div class="file-item-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M4,2H16L20,6V20A2,2 0 0,1 18,22H4A2,2 0 0,1 2,20V4A2,2 0 0,1 4,2M15,7H19.5L14,2.5V7A1,1 0 0,0 15,7Z" /></svg></div>
-            <div class="file-item-details"><div class="file-name" title="${item.originalFilename}">${item.originalFilename}</div><div class="file-message"></div><div class="progress-bar"><div class="progress-bar-inner"></div></div></div>
+            <div class="file-item-details">
+                <div class="file-name-wrapper">
+                    <span class="file-output-format">${formatLabel}</span>
+                    <div class="file-name" title="${item.originalFilename}">${item.originalFilename}</div>
+                </div>
+                <div class="file-message"></div>
+                <div class="progress-bar"><div class="progress-bar-inner"></div></div>
+            </div>
             <div class="file-item-actions"></div>`;
-
+    
         el.querySelector('.file-message').classList.remove('error');
         if (item.status === 'failed' && item.error) {
             el.querySelector('.file-message').textContent = `Error: ${item.error}`;

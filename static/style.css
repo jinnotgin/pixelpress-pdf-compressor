@@ -400,7 +400,6 @@ body {
 	margin-top: 12px;
 }
 
-/* Other styles remain unchanged... */
 /* ===== FILE ITEM CARD ===== */
 .file-item {
 	background-color: var(--panel-bg-color);
@@ -426,12 +425,28 @@ body {
 	flex-grow: 1;
 	overflow: hidden;
 }
+.file-name-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 4px;
+}
 .file-name {
 	font-weight: 600;
-	margin-bottom: 4px;
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
+}
+.file-output-format {
+    background-color: #e5e7eb; /* Using border color for a subtle look */
+    color: var(--medium-text);
+    font-size: 0.7rem;
+    font-weight: 600;
+    padding: 2px 6px;
+    border-radius: 4px;
+    text-transform: uppercase;
+    flex-shrink: 0;
+    line-height: 1;
 }
 .file-message {
 	font-size: 0.85rem;
@@ -507,6 +522,9 @@ body {
 
 .file-item.is-completed {
 	align-items: center;
+}
+.file-item.is-completed .file-name-wrapper {
+    margin-bottom: 0;
 }
 .file-item.is-completed .file-item-icon {
 	display: none;
