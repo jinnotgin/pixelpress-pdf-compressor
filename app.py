@@ -332,7 +332,7 @@ def process_pdf_task(task_id, input_pdf_path, output_file_path, dpi,
                                     return
 
                                 processed_tiles += 1
-                                # Log to console that we are starting the tile, but update the heartbeat *after* the heavy work.
+                                update_task_in_db(task_id, message=f"Rasterizing Page {page_num + 1}: Tile {processed_tiles}/{total_tiles}...", update_heartbeat=True)
                                 app.logger.info(f"Task {task_id}: Rasterizing Page {page_num + 1}: Tile {processed_tiles}/{total_tiles}...")
 
                                 x0 = (x_tile * TILE_SIZE_PX) / zoom; y0 = (y_tile * TILE_SIZE_PX) / zoom
@@ -350,10 +350,6 @@ def process_pdf_task(task_id, input_pdf_path, output_file_path, dpi,
                                     app.logger.warning(f"Task {task_id}: Failed to convert tile, fallback to pixmap. Error: {img_e}")
                                     new_page.insert_image(tile_rect, pixmap=tile_pix)
                                 tile_pix = None
-                                
-                                # Now that the long operation is done, update the DB with progress and a fresh heartbeat.
-                                update_task_in_db(task_id, message=f"Rasterizing Page {page_num + 1}: Tile {processed_tiles}/{total_tiles}...", update_heartbeat=True)
-
 
                     elif output_target_format == 'image':
                         temp_page_filename = f"page_{page_num:04d}.{page_raster_format}"
