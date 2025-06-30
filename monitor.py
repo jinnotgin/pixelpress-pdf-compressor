@@ -112,7 +112,7 @@ def check_stale_tasks():
             if not psutil.pid_exists(worker_pid):
                 # The process is truly gone. It's an orphan.
                 log.error(f"Watchdog: Worker PID {worker_pid} for task {task_id} is GONE. Marking task as failed.")
-                mark_task_as_failed(task_id, "Task failed due to vanished or crashed worker process.")
+                mark_task_as_failed(task_id, "Task failed due to missing or crashed worker process.")
             else:
                 # The process is still alive, just very busy or stuck. We'll leave it alone.
                 log.warning(f"Watchdog: Worker PID {worker_pid} for task {task_id} is still alive but not sending heartbeats. Monitoring.")
