@@ -144,7 +144,6 @@ document.addEventListener('DOMContentLoaded', function () {
             return;
         }
 
-        fileInput.value = '';
         if (!files || files.length === 0) return;
 
         const currentSettings = {
@@ -186,6 +185,7 @@ document.addEventListener('DOMContentLoaded', function () {
             fileItems.unshift(newItem);
         }
 
+        fileInput.value = '';
         saveState();
         renderFileList();
         processFileQueue();
