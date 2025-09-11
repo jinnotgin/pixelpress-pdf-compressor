@@ -232,7 +232,6 @@ def update_task_in_db(task_id, status=None, message=None, progress=None,
     finally:
         if conn: conn.close()
 
-
 def process_pdf_task(task_id, input_pdf_path, output_file_path, dpi,
                      original_input_filename,
                      page_raster_format, jpeg_raster_quality, output_target_format,
@@ -258,8 +257,8 @@ def process_pdf_task(task_id, input_pdf_path, output_file_path, dpi,
     update_task_in_db(task_id, message='Preparing: Opening your PDF...', progress=5, update_heartbeat=True)
 
     # --- Dependency Checks ---
-    if ocr_enabled and output_target_format == 'pdf' and not shutil.which('tesseract'):
-        error_msg = "Server configuration error: OCR is enabled but 'tesseract' command was not found."
+    if ocr_enabled and output_target_format == 'pdf' and not shutil.which('ocrmypdf'):
+        error_msg = "Server configuration error: OCR is enabled but 'ocrmypdf' command was not found."
         update_task_in_db(task_id, status='failed', message=error_msg)
         app.logger.error(f"Task {task_id}: {error_msg}")
         return
@@ -428,26 +427,53 @@ def process_pdf_task(task_id, input_pdf_path, output_file_path, dpi,
             if output_target_format == 'pdf':
                 unoptimized_pdf_path = os.path.join(temp_processing_dir, "unoptimized.pdf")
                 if ocr_enabled:
-                    update_task_in_db(task_id, progress=88, message="Preparing for OCR...", update_heartbeat=True)
-                    image_list_path = os.path.join(temp_processing_dir, "ocr_image_list.txt")
-                    with open(image_list_path, 'w', encoding='utf-8') as f:
-                        for img_path in temp_image_files_for_stitching_or_ocr: f.write(f"{img_path}\n")
+                    num_pages_to_ocr = len(temp_image_files_for_stitching_or_ocr)
+                    update_task_in_db(task_id, progress=88, message=f"Preparing to apply OCR to {num_pages_to_ocr} pages...", update_heartbeat=True)
                     
-                    update_task_in_db(task_id, progress=90, message="Applying OCR (this may take a while)...", update_heartbeat=True)
-                    tesseract_output_prefix = os.path.join(temp_processing_dir, "tesseract_output")
-                    tesseract_pdf_output = f"{tesseract_output_prefix}.pdf"
+                    individual_ocr_pdfs = []
+                    for i, img_path in enumerate(temp_image_files_for_stitching_or_ocr):
+                        page_num_human = i + 1
+                        if check_cancellation(task_id):
+                            app.logger.info(f"Task {task_id} cancelled by user during per-page OCR.")
+                            cleanup_and_delete_task_record(task_id)
+                            return
 
-                    ocr_command = ['tesseract', image_list_path, tesseract_output_prefix, '-l', 'eng', '--dpi', str(dpi), 'pdf']
-                    app.logger.info(f"Task {task_id}: Running Tesseract command: {' '.join(ocr_command)}")
-                    try:
-                        result = subprocess.run(ocr_command, check=True, capture_output=True, text=True, encoding='utf-8')
-                        app.logger.info(f"Task {task_id}: Tesseract completed. STDOUT: {result.stdout}")
-                        shutil.move(tesseract_pdf_output, unoptimized_pdf_path)
-                    except subprocess.CalledProcessError as e:
-                        error_msg = f"Tesseract OCR processing failed. See server logs for details."
-                        app.logger.error(f"Task {task_id} Tesseract failed. Command: '{' '.join(e.cmd)}'. Return code: {e.returncode}. STDERR: {e.stderr}")
-                        update_task_in_db(task_id, status='failed', message=error_msg)
-                        return
+                        update_task_in_db(task_id, message=f"Applying OCR: Page {page_num_human} of {num_pages_to_ocr} (this may take a while)...", update_heartbeat=True)
+                        
+                        single_page_output_pdf = os.path.join(temp_processing_dir, f"ocr_page_{i:04d}.pdf")
+                        
+                        ocr_command = [
+                            'ocrmypdf',
+                            '--optimize', '0',          # Disable file size optimization
+                            '--output-type', 'pdf',     # Disable PDF/A generation
+                            '--fast-web-view', '999999', # Disable fast web view optimization
+                            '--image-dpi', str(dpi),
+                            '--tesseract-timeout', '600',
+                            img_path,
+                            single_page_output_pdf
+                        ]
+                        app.logger.info(f"Task {task_id}: Running OCR for page {page_num_human}: {' '.join(ocr_command)}")
+                        
+                        try:
+                            result = subprocess.run(ocr_command, check=True, capture_output=True, text=True, encoding='utf-8')
+                            app.logger.info(f"Task {task_id}: OCR for page {page_num_human} completed. STDOUT: {result.stdout}")
+                            individual_ocr_pdfs.append(single_page_output_pdf)
+                        except subprocess.CalledProcessError as e:
+                            error_msg = f"OCR processing failed on page {page_num_human}. See server logs for details."
+                            app.logger.error(f"Task {task_id} OCR failed. Command: '{' '.join(e.cmd)}'. Return code: {e.returncode}. STDERR: {e.stderr}")
+                            update_task_in_db(task_id, status='failed', message=error_msg)
+                            return
+
+                    # Merge the individual OCR'd PDFs into a single file
+                    update_task_in_db(task_id, progress=92, message="Finalising: Merging OCR'd pages...", update_heartbeat=True)
+                    merged_doc = fitz.open()
+                    for pdf_path in individual_ocr_pdfs:
+                        with fitz.open(pdf_path) as single_page_doc:
+                            merged_doc.insert_pdf(single_page_doc)
+                    
+                    # Save the merged document to the unoptimized path for the final step
+                    merged_doc.save(unoptimized_pdf_path, garbage=4, deflate=True, clean=True)
+                    merged_doc.close()
                 else:
                     update_task_in_db(task_id, progress=90, message="Finalising: Saving intermediate PDF...", update_heartbeat=True)
                     output_doc_for_pdf.save(unoptimized_pdf_path, garbage=4, deflate=True, deflate_images=True, clean=True)
@@ -458,8 +484,17 @@ def process_pdf_task(task_id, input_pdf_path, output_file_path, dpi,
                     return
                 
                 if shutil.which('ocrmypdf'):
-                    update_task_in_db(task_id, progress=95, message="Finalising: Optimizing PDF...", update_heartbeat=True)
-                    optimization_command = ['ocrmypdf', '--tesseract-timeout', '0', '--optimize', '1', '--skip-text', unoptimized_pdf_path, output_file_path]
+                    update_task_in_db(task_id, progress=95, message="Finalising: Optimising PDF...", update_heartbeat=True)
+                    # For OCR'd files, ocrmypdf will detect existing text and just optimize.
+                    # For non-OCR'd files, --skip-text prevents it from trying to re-OCR.
+                    optimization_command = [
+                        'ocrmypdf', 
+                        '--tesseract-timeout', '0', 
+                        '--optimize', '1', 
+                        '--skip-text', 
+                        unoptimized_pdf_path, 
+                        output_file_path
+                    ]
                     app.logger.info(f"Task {task_id}: Running optimization command: {' '.join(optimization_command)}")
                     try:
                         result = subprocess.run(optimization_command, check=True, capture_output=True, text=True, encoding='utf-8')
@@ -470,7 +505,7 @@ def process_pdf_task(task_id, input_pdf_path, output_file_path, dpi,
                         shutil.move(unoptimized_pdf_path, output_file_path)
                 else:
                     app.logger.warning(f"Task {task_id}: 'ocrmypdf' not found. Skipping optimization step. Output may be larger than expected.")
-                    update_task_in_db(task_id, progress=98, message="Finalising: Saving PDF (optimization skipped)...", update_heartbeat=True)
+                    update_task_in_db(task_id, progress=98, message="Finalising: Saving PDF (optimisation skipped)...", update_heartbeat=True)
                     shutil.move(unoptimized_pdf_path, output_file_path)
 
             elif output_target_format == 'image':
@@ -479,7 +514,6 @@ def process_pdf_task(task_id, input_pdf_path, output_file_path, dpi,
                     return
 
                 update_task_in_db(task_id, progress=95, message="Finalising: Stitching images...", update_heartbeat=True)
-                # This logic remains the same as your previous version
                 pil_page_images, final_image_pil = [], None
                 try:
                     actual_max_width, actual_total_height = 0, 0
