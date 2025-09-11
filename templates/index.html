@@ -158,6 +158,17 @@
 								</div>
 							</div>
 						</div>
+						<!-- MODIFIED: OCR Options Group -->
+						<div class="form-group" id="ocr-options-group">
+							<label class="form-label">Searchable Text (OCR)</label>
+							<div class="checkbox-group">
+								<input type="checkbox" id="ocr_enabled" name="ocr_enabled" value="true" checked />
+								<label for="ocr_enabled">Make text searchable & selectable</label>
+							</div>
+							<p class="form-group-explanation">
+								Allows you to find and copy text in the PDF. Processing will take longer.
+							</p>
+						</div>
                         <!-- MOVED: Reset button to end of form -->
                         <div class="form-action-group">
                             <button type="button" id="reset-settings-btn" class="button-secondary">
@@ -168,7 +179,7 @@
 				</div>
 
 				<footer class="settings-footer">
-					v0.6.1 | by <a href="https://linjin.me" target="_blank">Jin</a> with
+					v0.7 | by <a href="https://linjin.me" target="_blank">Jin</a> with
 					<a
 						href="https://developers.googleblog.com/en/gemini-2-5-thinking-model-updates/"
 						target="_blank"

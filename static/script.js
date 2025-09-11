@@ -16,6 +16,9 @@ document.addEventListener('DOMContentLoaded', function () {
     const jpegQualityInput = document.getElementById('jpeg_quality');
     const jpegQualityNumberInput = document.getElementById('jpeg-quality-number-input'); // New
     const jpegQualityGroup = document.getElementById('jpeg-quality-group');
+    const ocrEnabledInput = document.getElementById('ocr_enabled'); // ADDED
+    const ocrOptionsGroup = document.getElementById('ocr-options-group');
+    const outputFormatRadios = document.querySelectorAll('input[name="output_target_format"]');
     const imageFormatRadios = document.querySelectorAll('input[name="image_format"]');
 
     const clearLogBtn = document.getElementById('clear-log-btn');
@@ -56,7 +59,9 @@ document.addEventListener('DOMContentLoaded', function () {
         setupRangeInputSync(jpegQualityInput, jpegQualityNumberInput);
         
         imageFormatRadios.forEach(radio => radio.addEventListener('change', toggleJpegQualityInput));
+        outputFormatRadios.forEach(radio => radio.addEventListener('change', toggleOcrOptionVisibility));
         toggleJpegQualityInput();
+        toggleOcrOptionVisibility();
 
         loadState();
         pruneOldFinishedItems();
@@ -150,7 +155,8 @@ document.addEventListener('DOMContentLoaded', function () {
             dpi: dpiInput.value,
             pageRasterFormat: document.querySelector('input[name="image_format"]:checked').value,
             jpegQuality: (document.querySelector('input[name="image_format"]:checked').value === 'jpeg' ? jpegQualityInput.value : null),
-            outputTargetFormat: document.querySelector('input[name="output_target_format"]:checked').value
+            outputTargetFormat: document.querySelector('input[name="output_target_format"]:checked').value,
+            ocrEnabled: ocrEnabledInput.checked,
         };
 
         const activeFileKeys = new Set(fileItems.filter(item => ['pending', 'processing', 'uploading'].includes(item.status)).map(item => item.originalFilename + item.settings.outputTargetFormat + item.settings.pageRasterFormat + item.settings.dpi));
@@ -213,6 +219,7 @@ document.addEventListener('DOMContentLoaded', function () {
         formData.append('image_format', currentItem.settings.pageRasterFormat);
         if (currentItem.settings.pageRasterFormat === 'jpeg') formData.append('jpeg_quality', currentItem.settings.jpegQuality);
         formData.append('output_target_format', currentItem.settings.outputTargetFormat);
+        formData.append('ocr_enabled', currentItem.settings.ocrEnabled);
 
         updateItemState(currentItem, { status: 'uploading', message: 'Uploading file...', progress: 0 });
         try {
@@ -487,6 +494,15 @@ document.addEventListener('DOMContentLoaded', function () {
         if (fileItems.length < prevLength) saveState();
     }
 
+    function toggleOcrOptionVisibility() {
+        const selectedFormat = document.querySelector('input[name="output_target_format"]:checked').value;
+        if (selectedFormat === 'pdf') {
+            ocrOptionsGroup.style.display = 'block';
+        } else {
+            ocrOptionsGroup.style.display = 'none';
+        }
+    }
+    
     // --- UI & Event Helpers ---
     function setupRangeInputSync(rangeEl, numberEl) {
         const min = parseInt(rangeEl.min, 10);
@@ -522,7 +538,8 @@ document.addEventListener('DOMContentLoaded', function () {
             outputFormat: 'pdf',
             dpi: 72,
             imageFormat: 'jpeg',
-            jpegQuality: 75
+            jpegQuality: 75,
+            ocrEnabled: true,
         };
 
         // Set output format radio
@@ -538,9 +555,13 @@ document.addEventListener('DOMContentLoaded', function () {
         // Set JPEG Quality
         jpegQualityInput.value = defaults.jpegQuality;
         jpegQualityNumberInput.value = defaults.jpegQuality;
+
+        // Set OCR
+        ocrEnabledInput.checked = defaults.ocrEnabled;
         
         // Ensure UI consistency for conditional fields
         toggleJpegQualityInput();
+        toggleOcrOptionVisibility();
 
         // Give user feedback
         showToast("Settings have been reset to default.");

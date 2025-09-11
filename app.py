@@ -10,6 +10,8 @@ import threading
 import time
 import logging
 import sqlite3
+import subprocess
+import shutil
 import tempfile
 from flask import Flask, request, jsonify, render_template, send_from_directory, abort
 from werkzeug.utils import secure_filename
@@ -93,6 +95,7 @@ def init_db():
                 page_raster_format TEXT,
                 jpeg_quality INTEGER,
                 output_target_format TEXT,
+                ocr_enabled INTEGER DEFAULT 0,
                 original_size_bytes INTEGER,
                 processed_size_bytes INTEGER,
                 timestamp_created REAL NOT NULL,
@@ -111,6 +114,7 @@ def init_db():
             'original_size_bytes': "ALTER TABLE task_status ADD COLUMN original_size_bytes INTEGER;",
             'processed_size_bytes': "ALTER TABLE task_status ADD COLUMN processed_size_bytes INTEGER;",
             'output_target_format': "ALTER TABLE task_status ADD COLUMN output_target_format TEXT;",
+            'ocr_enabled': "ALTER TABLE task_status ADD COLUMN ocr_enabled INTEGER DEFAULT 0;",
             'cancellation_requested': "ALTER TABLE task_status ADD COLUMN cancellation_requested INTEGER DEFAULT 0;",
             'worker_pid': "ALTER TABLE task_status ADD COLUMN worker_pid INTEGER;",
             'heartbeat_timestamp': "ALTER TABLE task_status ADD COLUMN heartbeat_timestamp REAL;"
@@ -231,8 +235,8 @@ def update_task_in_db(task_id, status=None, message=None, progress=None,
 
 def process_pdf_task(task_id, input_pdf_path, output_file_path, dpi,
                      original_input_filename,
-                     page_raster_format, jpeg_raster_quality,
-                     output_target_format):
+                     page_raster_format, jpeg_raster_quality, output_target_format,
+                     ocr_enabled):
 
     # --- Task Start: Announce PID and Initial Heartbeat ---
     worker_pid = os.getpid()
@@ -247,10 +251,18 @@ def process_pdf_task(task_id, input_pdf_path, output_file_path, dpi,
     app.logger.info(
         f"Task {task_id} ({original_input_filename}) processing. Target: {output_target_format.upper()}. "
         f"DPI: {dpi}, Page Raster Format: {page_raster_format}, "
-        f"JPEG Quality: {jpeg_raster_quality if page_raster_format == 'jpeg' else 'N/A'}. "
+        f"JPEG Quality: {jpeg_raster_quality if page_raster_format == 'jpeg' else 'N/A'}, "
+        f"OCR Enabled: {ocr_enabled}. "
         f"Thread: {threading.current_thread().name}"
     )
     update_task_in_db(task_id, message='Preparing: Opening your PDF...', progress=5, update_heartbeat=True)
+
+    # Check for ocrmypdf executable if OCR is requested
+    if ocr_enabled and output_target_format == 'pdf' and not shutil.which('ocrmypdf'):
+        error_msg = "Server configuration error: OCR processing is enabled but 'ocrmypdf' command was not found."
+        update_task_in_db(task_id, status='failed', message=error_msg)
+        app.logger.error(f"Task {task_id}: {error_msg}")
+        return
 
     original_size = None
     processed_size = None
@@ -419,6 +431,35 @@ def process_pdf_task(task_id, input_pdf_path, output_file_path, dpi,
                     if final_image_pil: final_image_pil.close()
                     for img_obj in pil_page_images: img_obj.close()
 
+            # --- OCR Step (if enabled) ---
+            if ocr_enabled and output_target_format == 'pdf':
+                if check_cancellation(task_id):
+                    app.logger.info(f"Task {task_id} cancelled before OCR step.")
+                    cleanup_and_delete_task_record(task_id)
+                    return
+
+                update_task_in_db(task_id, progress=98, message="Applying OCR (this may take a while)...", update_heartbeat=True)
+                app.logger.info(f"Task {task_id}: Starting OCR step on {output_file_path}")
+
+                ocr_temp_output_path = output_file_path + ".ocr_temp.pdf"
+                # Command to run ocrmypdf. --skip-text is a safe default.
+                ocr_command = ['ocrmypdf', '-l', 'eng', '--skip-text', output_file_path, ocr_temp_output_path]
+
+                try:
+                    # Execute the command
+                    result = subprocess.run(ocr_command, check=True, capture_output=True, text=True, encoding='utf-8')
+                    app.logger.info(f"Task {task_id}: ocrmypdf completed successfully. STDOUT: {result.stdout}")
+                    # Replace the original compressed file with the new OCR'd file
+                    os.remove(output_file_path)
+                    shutil.move(ocr_temp_output_path, output_file_path)
+                    app.logger.info(f"Task {task_id}: Replaced compressed file with OCR'd version.")
+                except subprocess.CalledProcessError as e:
+                    error_msg = f"OCR processing failed. See server logs for details."
+                    app.logger.error(f"Task {task_id} OCR failed. Command: '{' '.join(e.cmd)}'. Return code: {e.returncode}. STDERR: {e.stderr}")
+                    update_task_in_db(task_id, status='failed', message=error_msg)
+                    if os.path.exists(ocr_temp_output_path): os.remove(ocr_temp_output_path)
+                    return
+
             try:
                 if os.path.exists(output_file_path): processed_size = os.path.getsize(output_file_path)
             except OSError as e: app.logger.warning(f"Task {task_id}: Could not get size of output file: {e}")
@@ -468,6 +509,7 @@ def upload_file():
             try: jpeg_quality_val = int(request.form.get('jpeg_quality', '75'));_ = (1 <= jpeg_quality_val <= 100) or exec("raise ValueError")
             except: jpeg_quality_val = 75
         output_target_format = request.form.get('output_target_format', 'pdf').lower();_ = (output_target_format in ['pdf', 'image']) or exec("output_target_format='pdf'")
+        ocr_enabled = request.form.get('ocr_enabled', 'false').lower() == 'true'
         if output_target_format == 'image' and not Image: return jsonify({'error': 'Server configuration error: Image processing (Pillow) is not available.'}), 503
 
         server_input_filename = f"{task_id}_{original_filename_secure}"
@@ -486,10 +528,10 @@ def upload_file():
         try:
             conn = get_db_connection()
             current_time = time.time()
-            conn.execute("""
-                INSERT INTO task_status (task_id, status, message, input_path, output_path, original_filename, user_facing_output_filename, dpi, page_raster_format, jpeg_quality, output_target_format, timestamp_created, timestamp_last_updated)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (task_id, 'queued', 'Queued for processing.', input_pdf_path, output_path, original_filename_secure, user_facing_dl_name, dpi, page_raster_format, jpeg_quality_val, output_target_format, current_time, current_time))
+            conn.execute(f"""
+                INSERT INTO task_status (task_id, status, message, input_path, output_path, original_filename, user_facing_output_filename, dpi, page_raster_format, jpeg_quality, output_target_format, ocr_enabled, timestamp_created, timestamp_last_updated)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (task_id, 'queued', 'Queued for processing.', input_pdf_path, output_path, original_filename_secure, user_facing_dl_name, dpi, page_raster_format, jpeg_quality_val, output_target_format, 1 if ocr_enabled else 0, current_time, current_time))
             conn.commit()
         except sqlite3.Error as e:
             if os.path.exists(input_pdf_path): os.remove(input_pdf_path)
@@ -497,7 +539,7 @@ def upload_file():
         finally:
             if conn: conn.close()
 
-        pdf_processor_executor.submit(process_pdf_task, task_id, input_pdf_path, output_path, dpi, original_filename_secure, page_raster_format, jpeg_quality_val, output_target_format)
+        pdf_processor_executor.submit(process_pdf_task, task_id, input_pdf_path, output_path, dpi, original_filename_secure, page_raster_format, jpeg_quality_val, output_target_format, ocr_enabled)
         app.logger.info(f"Task {task_id} ({original_filename_secure}) submitted for processing.")
         return jsonify({'task_id': task_id, 'message': 'File upload successful, processing queued.'})
     else:

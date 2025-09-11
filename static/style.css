@@ -347,6 +347,31 @@ body {
     color: var(--dark-text);
 }
 
+.checkbox-group {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+}
+.checkbox-group input[type="checkbox"] {
+	width: 18px;
+	height: 18px;
+	accent-color: var(--primary-color);
+	cursor: pointer;
+}
+.checkbox-group label {
+	font-size: 0.9rem;
+	font-weight: 500;
+	color: var(--medium-text);
+	cursor: pointer;
+}
+.form-group-explanation {
+	font-size: 0.8rem;
+	color: var(--medium-text);
+	margin-top: 8px;
+	padding-left: 28px; /* Aligns text with the checkbox label */
+	line-height: 1.4;
+}
+
 
 /* ===== DROP ZONE & FILE LIST ===== */
 .drop-zone {
