@@ -257,9 +257,17 @@ def process_pdf_task(task_id, input_pdf_path, output_file_path, dpi,
     )
     update_task_in_db(task_id, message='Preparing: Opening your PDF...', progress=5, update_heartbeat=True)
 
-    # Check for ocrmypdf executable if OCR is requested
-    if ocr_enabled and output_target_format == 'pdf' and not shutil.which('ocrmypdf'):
-        error_msg = "Server configuration error: OCR processing is enabled but 'ocrmypdf' command was not found."
+    # --- Dependency Checks ---
+    if ocr_enabled and output_target_format == 'pdf' and not shutil.which('tesseract'):
+        error_msg = "Server configuration error: OCR is enabled but 'tesseract' command was not found."
+        update_task_in_db(task_id, status='failed', message=error_msg)
+        app.logger.error(f"Task {task_id}: {error_msg}")
+        return
+
+    # Pillow is required for image output AND for memory-efficient OCR PDF generation
+    if not Image and (output_target_format == 'image' or (output_target_format == 'pdf' and ocr_enabled)):
+        lib_name = "image stitching" if output_target_format == 'image' else "OCR image preparation"
+        error_msg = f"Server configuration error: Image library (Pillow) not found, which is required for {lib_name}."
         update_task_in_db(task_id, status='failed', message=error_msg)
         app.logger.error(f"Task {task_id}: {error_msg}")
         return
@@ -271,7 +279,7 @@ def process_pdf_task(task_id, input_pdf_path, output_file_path, dpi,
 
     with tempfile.TemporaryDirectory(prefix=f"pdftask_{task_id}_") as temp_processing_dir:
         app.logger.info(f"Task {task_id}: Using temporary directory {temp_processing_dir} for intermediate files.")
-        temp_image_files_for_stitching = []
+        temp_image_files_for_stitching_or_ocr = []
 
         try:
             if not os.path.exists(input_pdf_path):
@@ -297,14 +305,9 @@ def process_pdf_task(task_id, input_pdf_path, output_file_path, dpi,
                     update_task_in_db(task_id, status='failed', message="Input PDF has no pages. Cannot create a combined image.", progress=100, original_size_bytes_val=original_size)
                 return
 
-            if output_target_format == 'image' and not Image:
-                update_task_in_db(task_id, status='failed', message="Image processing library (Pillow) not available on server.")
-                app.logger.error(f"Task {task_id}: Pillow not installed, cannot create combined image target.")
-                return
-
             update_task_in_db(task_id, message=f"Processing: Analyzing {num_pages} pages...", progress=10, update_heartbeat=True)
 
-            if output_target_format == 'pdf':
+            if output_target_format == 'pdf' and not ocr_enabled:
                 output_doc_for_pdf = fitz.open()
 
             for page_num in range(num_pages):
@@ -313,7 +316,7 @@ def process_pdf_task(task_id, input_pdf_path, output_file_path, dpi,
                     cleanup_and_delete_task_record(task_id)
                     return
 
-                current_page_progress = int(80 * ((page_num + 1) / num_pages))
+                current_page_progress = int(75 * ((page_num + 1) / num_pages))
                 update_task_in_db(task_id, progress=(10 + current_page_progress), message=f"Rasterizing: Page {page_num + 1} of {num_pages}...", update_heartbeat=True)
 
                 page_instance = None
@@ -321,16 +324,17 @@ def process_pdf_task(task_id, input_pdf_path, output_file_path, dpi,
                     page_instance = input_doc.load_page(page_num)
                     zoom = dpi / 72.0
                     matrix = fitz.Matrix(zoom, zoom)
+                    page_rect = page_instance.rect
+                    page_pixel_width = page_rect.width * zoom
+                    page_pixel_height = page_rect.height * zoom
 
-                    if output_target_format == 'pdf':
-                        page_rect = page_instance.rect
+                    # Path A: Non-OCR PDF output. Tiling directly into a new fitz PDF document.
+                    if output_target_format == 'pdf' and not ocr_enabled:
                         new_page = output_doc_for_pdf.new_page(width=page_rect.width, height=page_rect.height)
-                        page_pixel_width = page_rect.width * zoom
-                        page_pixel_height = page_rect.height * zoom
                         save_args = {"output": page_raster_format}
                         if page_raster_format == 'jpeg': save_args["jpg_quality"] = jpeg_raster_quality
 
-                        app.logger.info(f"Task {task_id}: Page {page_num + 1} ({page_pixel_width:.0f}x{page_pixel_height:.0f}px). Using memory-saving tiling.")
+                        app.logger.info(f"Task {task_id}: Page {page_num + 1} ({page_pixel_width:.0f}x{page_pixel_height:.0f}px). Using memory-saving tiling into PDF.")
                         num_tiles_x = math.ceil(page_pixel_width / TILE_SIZE_PX)
                         num_tiles_y = math.ceil(page_pixel_height / TILE_SIZE_PX)
                         total_tiles = num_tiles_x * num_tiles_y
@@ -353,7 +357,6 @@ def process_pdf_task(task_id, input_pdf_path, output_file_path, dpi,
                                 tile_rect = fitz.Rect(x0, y0, x1, y1)
 
                                 if tile_rect.is_empty: continue
-
                                 tile_pix = page_instance.get_pixmap(matrix=matrix, clip=tile_rect, alpha=False)
                                 try:
                                     image_bytes_for_tile = tile_pix.tobytes(**save_args)
@@ -363,20 +366,57 @@ def process_pdf_task(task_id, input_pdf_path, output_file_path, dpi,
                                     new_page.insert_image(tile_rect, pixmap=tile_pix)
                                 tile_pix = None
 
-                    elif output_target_format == 'image':
+                    # Path B: Cases needing full page images on disk (OCR PDF or stitched image output).
+                    elif (output_target_format == 'pdf' and ocr_enabled) or output_target_format == 'image':
                         temp_page_filename = f"page_{page_num:04d}.{page_raster_format}"
                         temp_page_filepath = os.path.join(temp_processing_dir, temp_page_filename)
+                        app.logger.info(f"Task {task_id}: Page {page_num + 1} ({page_pixel_width:.0f}x{page_pixel_height:.0f}px). Generating page image using tiling.")
+                        page_canvas_pil = None
                         try:
-                            pix_map = page_instance.get_pixmap(matrix=matrix, alpha=False)
-                            if page_raster_format == 'jpeg': pix_map.save(temp_page_filepath, jpg_quality=jpeg_raster_quality)
-                            else: pix_map.save(temp_page_filepath)
-                            temp_image_files_for_stitching.append(temp_page_filepath)
-                            pix_map = None
-                        except Exception as e_save_temp_img:
-                            error_msg = f"Error saving temp image for page {page_num + 1}: {str(e_save_temp_img)[:100]}"
+                            page_canvas_pil = Image.new('RGB', (math.ceil(page_pixel_width), math.ceil(page_pixel_height)), (255, 255, 255))
+                            num_tiles_x = math.ceil(page_pixel_width / TILE_SIZE_PX)
+                            num_tiles_y = math.ceil(page_pixel_height / TILE_SIZE_PX)
+                            total_tiles = num_tiles_x * num_tiles_y
+                            processed_tiles = 0
+
+                            for y_tile in range(num_tiles_y):
+                                for x_tile in range(num_tiles_x):
+                                    if check_cancellation(task_id): raise InterruptedError("Cancelled during page tiling")
+
+                                    processed_tiles += 1
+                                    update_task_in_db(task_id, message=f"Rasterizing Page {page_num + 1}: Tile {processed_tiles}/{total_tiles}...", update_heartbeat=True)
+                                    app.logger.info(f"Task {task_id}: Rasterizing Page {page_num + 1}: Tile {processed_tiles}/{total_tiles}...")
+
+                                    x0 = (x_tile * TILE_SIZE_PX) / zoom; y0 = (y_tile * TILE_SIZE_PX) / zoom
+                                    x1 = min(((x_tile + 1) * TILE_SIZE_PX) / zoom, page_rect.width)
+                                    y1 = min(((y_tile + 1) * TILE_SIZE_PX) / zoom, page_rect.height)
+                                    tile_rect = fitz.Rect(x0, y0, x1, y1)
+                                    if tile_rect.is_empty: continue
+
+                                    tile_pix = page_instance.get_pixmap(matrix=matrix, clip=tile_rect, alpha=False)
+                                    try:
+                                        with Image.frombytes("RGB", [tile_pix.width, tile_pix.height], tile_pix.samples) as tile_img_pil:
+                                            paste_x = math.floor(x_tile * TILE_SIZE_PX)
+                                            paste_y = math.floor(y_tile * TILE_SIZE_PX)
+                                            page_canvas_pil.paste(tile_img_pil, (paste_x, paste_y))
+                                    finally:
+                                        tile_pix = None
+                            
+                            save_params_pil = {}
+                            if page_raster_format == 'jpeg': save_params_pil.update({'quality': jpeg_raster_quality, 'optimize': True})
+                            page_canvas_pil.save(temp_page_filepath, **save_params_pil)
+                            temp_image_files_for_stitching_or_ocr.append(temp_page_filepath)
+                        except InterruptedError:
+                            app.logger.info(f"Task {task_id} cancelled by user during tiling to image.")
+                            cleanup_and_delete_task_record(task_id)
+                            return
+                        except Exception as e_page_gen:
+                            error_msg = f"Error generating image for page {page_num + 1}: {str(e_page_gen)[:100]}"
                             update_task_in_db(task_id, status='failed', message=error_msg)
                             app.logger.error(f"Task {task_id}: {error_msg}", exc_info=True)
                             return
+                        finally:
+                            if page_canvas_pil: page_canvas_pil.close()
                 finally:
                     if page_instance: page_instance.clean_contents(); page_instance = None
 
@@ -386,40 +426,79 @@ def process_pdf_task(task_id, input_pdf_path, output_file_path, dpi,
                 return
 
             if output_target_format == 'pdf':
-                update_task_in_db(task_id, progress=95, message="Finalizing: Saving new PDF...", update_heartbeat=True)
-                output_doc_for_pdf.save(output_file_path, garbage=4, deflate=True, deflate_images=True, clean=True)
+                unoptimized_pdf_path = os.path.join(temp_processing_dir, "unoptimized.pdf")
+                if ocr_enabled:
+                    update_task_in_db(task_id, progress=88, message="Preparing for OCR...", update_heartbeat=True)
+                    image_list_path = os.path.join(temp_processing_dir, "ocr_image_list.txt")
+                    with open(image_list_path, 'w', encoding='utf-8') as f:
+                        for img_path in temp_image_files_for_stitching_or_ocr: f.write(f"{img_path}\n")
+                    
+                    update_task_in_db(task_id, progress=90, message="Applying OCR (this may take a while)...", update_heartbeat=True)
+                    tesseract_output_prefix = os.path.join(temp_processing_dir, "tesseract_output")
+                    tesseract_pdf_output = f"{tesseract_output_prefix}.pdf"
+
+                    ocr_command = ['tesseract', image_list_path, tesseract_output_prefix, '-l', 'eng', '--dpi', str(dpi), 'pdf']
+                    app.logger.info(f"Task {task_id}: Running Tesseract command: {' '.join(ocr_command)}")
+                    try:
+                        result = subprocess.run(ocr_command, check=True, capture_output=True, text=True, encoding='utf-8')
+                        app.logger.info(f"Task {task_id}: Tesseract completed. STDOUT: {result.stdout}")
+                        shutil.move(tesseract_pdf_output, unoptimized_pdf_path)
+                    except subprocess.CalledProcessError as e:
+                        error_msg = f"Tesseract OCR processing failed. See server logs for details."
+                        app.logger.error(f"Task {task_id} Tesseract failed. Command: '{' '.join(e.cmd)}'. Return code: {e.returncode}. STDERR: {e.stderr}")
+                        update_task_in_db(task_id, status='failed', message=error_msg)
+                        return
+                else:
+                    update_task_in_db(task_id, progress=90, message="Finalising: Saving intermediate PDF...", update_heartbeat=True)
+                    output_doc_for_pdf.save(unoptimized_pdf_path, garbage=4, deflate=True, deflate_images=True, clean=True)
+
+                if check_cancellation(task_id):
+                    app.logger.info(f"Task {task_id} cancelled before optimization step.")
+                    cleanup_and_delete_task_record(task_id)
+                    return
+                
+                if shutil.which('ocrmypdf'):
+                    update_task_in_db(task_id, progress=95, message="Finalising: Optimizing PDF...", update_heartbeat=True)
+                    optimization_command = ['ocrmypdf', '--tesseract-timeout', '0', '--optimize', '1', '--skip-text', unoptimized_pdf_path, output_file_path]
+                    app.logger.info(f"Task {task_id}: Running optimization command: {' '.join(optimization_command)}")
+                    try:
+                        result = subprocess.run(optimization_command, check=True, capture_output=True, text=True, encoding='utf-8')
+                        app.logger.info(f"Task {task_id}: PDF optimization completed. STDOUT: {result.stdout}")
+                    except subprocess.CalledProcessError as e:
+                        app.logger.error(f"Task {task_id} PDF optimization failed: {e.stderr}. Moving unoptimized file to final destination.")
+                        update_task_in_db(message="Warning: PDF optimization step failed. File may be larger than expected.")
+                        shutil.move(unoptimized_pdf_path, output_file_path)
+                else:
+                    app.logger.warning(f"Task {task_id}: 'ocrmypdf' not found. Skipping optimization step. Output may be larger than expected.")
+                    update_task_in_db(task_id, progress=98, message="Finalising: Saving PDF (optimization skipped)...", update_heartbeat=True)
+                    shutil.move(unoptimized_pdf_path, output_file_path)
 
             elif output_target_format == 'image':
-                if not temp_image_files_for_stitching:
+                if not temp_image_files_for_stitching_or_ocr:
                     update_task_in_db(task_id, status='failed', message="Error: No page images were created.")
                     return
 
-                update_task_in_db(task_id, progress=95, message="Finalizing: Stitching images...", update_heartbeat=True)
+                update_task_in_db(task_id, progress=95, message="Finalising: Stitching images...", update_heartbeat=True)
+                # This logic remains the same as your previous version
                 pil_page_images, final_image_pil = [], None
                 try:
                     actual_max_width, actual_total_height = 0, 0
-                    for i, temp_file_path in enumerate(temp_image_files_for_stitching):
+                    for i, temp_file_path in enumerate(temp_image_files_for_stitching_or_ocr):
                         if check_cancellation(task_id):
                             app.logger.info(f"Task {task_id} cancelled by user during image stitching.")
                             cleanup_and_delete_task_record(task_id)
                             return
-                        update_task_in_db(task_id, message=f"Stitching: Loading page {i + 1}...", update_heartbeat=True)
                         img = Image.open(temp_file_path)
                         pil_page_images.append(img)
                         actual_max_width = max(actual_max_width, img.width)
                         actual_total_height += img.height
 
-                    if actual_max_width == 0 or actual_total_height == 0:
-                        update_task_in_db(task_id, status='failed', message="Error: Calculated image dimensions are zero.")
-                        return
-
                     final_image_pil = Image.new('RGB', (actual_max_width, actual_total_height), (255, 255, 255))
                     current_y_offset = 0
-                    for i, pil_img_to_paste in enumerate(pil_page_images):
-                        update_task_in_db(task_id, message=f"Stitching: Pasting page {i + 1}...", update_heartbeat=True)
+                    for pil_img_to_paste in pil_page_images:
                         final_image_pil.paste(pil_img_to_paste, (0, current_y_offset))
                         current_y_offset += pil_img_to_paste.height
-
+                    
                     save_params_pil = {}
                     if page_raster_format == 'jpeg': save_params_pil.update({'quality': jpeg_raster_quality, 'optimize': True})
                     final_image_pil.save(output_file_path, **save_params_pil)
@@ -430,36 +509,7 @@ def process_pdf_task(task_id, input_pdf_path, output_file_path, dpi,
                 finally:
                     if final_image_pil: final_image_pil.close()
                     for img_obj in pil_page_images: img_obj.close()
-
-            # --- OCR Step (if enabled) ---
-            if ocr_enabled and output_target_format == 'pdf':
-                if check_cancellation(task_id):
-                    app.logger.info(f"Task {task_id} cancelled before OCR step.")
-                    cleanup_and_delete_task_record(task_id)
-                    return
-
-                update_task_in_db(task_id, progress=98, message="Applying OCR (this may take a while)...", update_heartbeat=True)
-                app.logger.info(f"Task {task_id}: Starting OCR step on {output_file_path}")
-
-                ocr_temp_output_path = output_file_path + ".ocr_temp.pdf"
-                # Command to run ocrmypdf. --skip-text is a safe default.
-                ocr_command = ['ocrmypdf', '-l', 'eng', '--skip-text', output_file_path, ocr_temp_output_path]
-
-                try:
-                    # Execute the command
-                    result = subprocess.run(ocr_command, check=True, capture_output=True, text=True, encoding='utf-8')
-                    app.logger.info(f"Task {task_id}: ocrmypdf completed successfully. STDOUT: {result.stdout}")
-                    # Replace the original compressed file with the new OCR'd file
-                    os.remove(output_file_path)
-                    shutil.move(ocr_temp_output_path, output_file_path)
-                    app.logger.info(f"Task {task_id}: Replaced compressed file with OCR'd version.")
-                except subprocess.CalledProcessError as e:
-                    error_msg = f"OCR processing failed. See server logs for details."
-                    app.logger.error(f"Task {task_id} OCR failed. Command: '{' '.join(e.cmd)}'. Return code: {e.returncode}. STDERR: {e.stderr}")
-                    update_task_in_db(task_id, status='failed', message=error_msg)
-                    if os.path.exists(ocr_temp_output_path): os.remove(ocr_temp_output_path)
-                    return
-
+            
             try:
                 if os.path.exists(output_file_path): processed_size = os.path.getsize(output_file_path)
             except OSError as e: app.logger.warning(f"Task {task_id}: Could not get size of output file: {e}")
