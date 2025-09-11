@@ -54,7 +54,6 @@
 				<div class="settings-body">
 					<!-- This part will collapse -->
 					<form id="options-form">
-						<!-- Form content remains the same... -->
 						<div class="form-group">
 							<label class="form-label" for="format-pdf-output"
 								>Output Format</label
@@ -107,7 +106,7 @@
 									</div>
 								</div>
 							</div>
-							<div class="sub-group">
+							<div class="sub-group" id="image-type-group">
 								<label for="image_format" class="form-label-small"
 									>Image Type</label
 								>
@@ -129,36 +128,18 @@
 									<label for="format-png">PNG</label>
 								</div>
 							</div>
-							<div class="sub-group" id="jpeg-quality-group">
-								<label for="jpeg_quality" class="form-label-small"
-									>JPEG Quality</label
-								>
-								<div class="range-input-wrapper">
-									<input
-										type="range"
-										class="form-range"
-										id="jpeg_quality"
-										name="jpeg_quality"
-										value="75"
-										min="1"
-										max="100"
-										step="1"
-									/>
-									<div class="range-value-input-group">
-										<input
-											type="number"
-											id="jpeg-quality-number-input"
-											class="range-number-input"
-											value="75"
-											min="1"
-											max="100"
-										/>
-										<span>%</span>
-									</div>
+							<!-- Compression Level sub-group -->
+							<div class="sub-group" id="compression-level-group">
+								<label for="comp-level-1" class="form-label-small">Compression Level</label>
+								<div class="segmented-control">
+									<input type="radio" id="comp-level-1" name="compression_level" value="1" checked />
+									<label for="comp-level-1" title="High quality, larger file size.">High</label>
+									<input type="radio" id="comp-level-3" name="compression_level" value="3" />
+									<label for="comp-level-3" title="Smallest file size, lower image quality.">Extreme</label>
 								</div>
 							</div>
 						</div>
-						<!-- MODIFIED: OCR Options Group -->
+						<!-- OCR Options Group -->
 						<div class="form-group" id="ocr-options-group">
 							<label class="form-label">Searchable Text (OCR)</label>
 							<div class="checkbox-group">
@@ -169,12 +150,12 @@
 								Allows you to find and copy text in the PDF. Processing will take longer.
 							</p>
 						</div>
-                        <!-- MOVED: Reset button to end of form -->
-                        <div class="form-action-group">
-                            <button type="button" id="reset-settings-btn" class="button-secondary">
-                                Reset to Defaults
-                            </button>
-                        </div>
+						<!-- Reset button to end of form -->
+						<div class="form-action-group">
+							<button type="button" id="reset-settings-btn" class="button-secondary">
+								Reset to Defaults
+							</button>
+						</div>
 					</form>
 				</div>
 

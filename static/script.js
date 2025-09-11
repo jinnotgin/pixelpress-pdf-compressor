@@ -13,13 +13,11 @@ document.addEventListener('DOMContentLoaded', function () {
     const settingsPanelHeader = document.querySelector('.settings-panel-header');
     const dpiInput = document.getElementById('dpi');
     const dpiNumberInput = document.getElementById('dpi-number-input'); // New
-    const jpegQualityInput = document.getElementById('jpeg_quality');
-    const jpegQualityNumberInput = document.getElementById('jpeg-quality-number-input'); // New
-    const jpegQualityGroup = document.getElementById('jpeg-quality-group');
     const ocrEnabledInput = document.getElementById('ocr_enabled'); // ADDED
     const ocrOptionsGroup = document.getElementById('ocr-options-group');
+    const compressionLevelGroup = document.getElementById('compression-level-group');
+    const imageTypeGroup = document.getElementById('image-type-group'); // New
     const outputFormatRadios = document.querySelectorAll('input[name="output_target_format"]');
-    const imageFormatRadios = document.querySelectorAll('input[name="image_format"]');
 
     const clearLogBtn = document.getElementById('clear-log-btn');
     const toastContainer = document.getElementById('toast-container');
@@ -56,12 +54,9 @@ document.addEventListener('DOMContentLoaded', function () {
 
         // Setup two-way data binding for range sliders and number inputs
         setupRangeInputSync(dpiInput, dpiNumberInput);
-        setupRangeInputSync(jpegQualityInput, jpegQualityNumberInput);
         
-        imageFormatRadios.forEach(radio => radio.addEventListener('change', toggleJpegQualityInput));
-        outputFormatRadios.forEach(radio => radio.addEventListener('change', toggleOcrOptionVisibility));
-        toggleJpegQualityInput();
-        toggleOcrOptionVisibility();
+        outputFormatRadios.forEach(radio => radio.addEventListener('change', togglePdfSpecificOptions));
+        togglePdfSpecificOptions();
 
         loadState();
         pruneOldFinishedItems();
@@ -154,9 +149,10 @@ document.addEventListener('DOMContentLoaded', function () {
         const currentSettings = {
             dpi: dpiInput.value,
             pageRasterFormat: document.querySelector('input[name="image_format"]:checked').value,
-            jpegQuality: (document.querySelector('input[name="image_format"]:checked').value === 'jpeg' ? jpegQualityInput.value : null),
+            // jpegQuality is removed
             outputTargetFormat: document.querySelector('input[name="output_target_format"]:checked').value,
             ocrEnabled: ocrEnabledInput.checked,
+            compressionLevel: document.querySelector('input[name="compression_level"]:checked').value, // MODIFIED
         };
 
         const activeFileKeys = new Set(fileItems.filter(item => ['pending', 'processing', 'uploading'].includes(item.status)).map(item => item.originalFilename + item.settings.outputTargetFormat + item.settings.pageRasterFormat + item.settings.dpi));
@@ -217,9 +213,12 @@ document.addEventListener('DOMContentLoaded', function () {
         formData.append('pdf_file', currentItem.file);
         formData.append('dpi', currentItem.settings.dpi);
         formData.append('image_format', currentItem.settings.pageRasterFormat);
-        if (currentItem.settings.pageRasterFormat === 'jpeg') formData.append('jpeg_quality', currentItem.settings.jpegQuality);
+        // jpeg_quality is removed
         formData.append('output_target_format', currentItem.settings.outputTargetFormat);
         formData.append('ocr_enabled', currentItem.settings.ocrEnabled);
+        if (currentItem.settings.outputTargetFormat === 'pdf') { // Only send if relevant
+            formData.append('compression_level', currentItem.settings.compressionLevel);
+        }
 
         updateItemState(currentItem, { status: 'uploading', message: 'Uploading file...', progress: 0 });
         try {
@@ -494,12 +493,21 @@ document.addEventListener('DOMContentLoaded', function () {
         if (fileItems.length < prevLength) saveState();
     }
 
-    function toggleOcrOptionVisibility() {
+    function togglePdfSpecificOptions() {
         const selectedFormat = document.querySelector('input[name="output_target_format"]:checked').value;
-        if (selectedFormat === 'pdf') {
-            ocrOptionsGroup.style.display = 'block';
-        } else {
-            ocrOptionsGroup.style.display = 'none';
+        const isPdfOutput = selectedFormat === 'pdf';
+
+        // Options only visible for PDF output
+        ocrOptionsGroup.style.display = isPdfOutput ? 'block' : 'none';
+        compressionLevelGroup.style.display = isPdfOutput ? 'block' : 'none';
+        
+        // Option only visible for Image output
+        imageTypeGroup.style.display = isPdfOutput ? 'none' : 'block';
+
+        if (isPdfOutput) {
+            // When outputting to PDF, the intermediate page rasterization
+            // will be forced to JPEG for better compression.
+            document.getElementById('format-jpeg').checked = true;
         }
     }
     
@@ -538,8 +546,8 @@ document.addEventListener('DOMContentLoaded', function () {
             outputFormat: 'pdf',
             dpi: 72,
             imageFormat: 'jpeg',
-            jpegQuality: 75,
             ocrEnabled: true,
+            compressionLevel: '1', // MODIFIED
         };
 
         // Set output format radio
@@ -552,16 +560,14 @@ document.addEventListener('DOMContentLoaded', function () {
         // Set image format radio
         document.getElementById('format-jpeg').checked = true;
 
-        // Set JPEG Quality
-        jpegQualityInput.value = defaults.jpegQuality;
-        jpegQualityNumberInput.value = defaults.jpegQuality;
-
         // Set OCR
         ocrEnabledInput.checked = defaults.ocrEnabled;
+
+        // Set Compression Level (MODIFIED)
+        document.getElementById('comp-level-1').checked = true;
         
         // Ensure UI consistency for conditional fields
-        toggleJpegQualityInput();
-        toggleOcrOptionVisibility();
+        togglePdfSpecificOptions();
 
         // Give user feedback
         showToast("Settings have been reset to default.");
@@ -570,7 +576,6 @@ document.addEventListener('DOMContentLoaded', function () {
     function showGlobalError(message) { globalErrorMessage.textContent = message; globalErrorBanner.style.display = 'flex'; }
     function handleDrop(e) { handleFiles(e.dataTransfer.files); }
     function preventDefaults(e) { e.preventDefault(); e.stopPropagation(); }
-    function toggleJpegQualityInput() { jpegQualityGroup.style.display = (document.querySelector('input[name="image_format"]:checked').value === 'jpeg') ? 'block' : 'none'; }
     function handleFileItemActions(event) { const button = event.target.closest('.remove-file-item-btn'); if (button) { const itemEl = button.closest('.file-item'); if (itemEl && itemEl.dataset.id) removeItemFromLog(itemEl.dataset.id); } }
     function showToast(message) { const toast = document.createElement('div'); toast.className = 'toast'; toast.textContent = message; toastContainer.appendChild(toast); setTimeout(() => toast.remove(), 5000); }
     function formatBytes(bytes, decimals = 1) { if (bytes == null || isNaN(bytes)) return 'N/A'; if (bytes === 0) return '0 B'; const k = 1024; const sizes = ['B', 'KB', 'MB', 'GB', 'TB']; const i = Math.floor(Math.log(bytes) / Math.log(k)); return parseFloat((bytes / Math.pow(k, i)).toFixed(decimals < 0 ? 0 : decimals)) + ' ' + sizes[i]; }

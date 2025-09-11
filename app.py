@@ -96,6 +96,7 @@ def init_db():
                 jpeg_quality INTEGER,
                 output_target_format TEXT,
                 ocr_enabled INTEGER DEFAULT 0,
+                pdf_optimization_level INTEGER DEFAULT 1,
                 original_size_bytes INTEGER,
                 processed_size_bytes INTEGER,
                 timestamp_created REAL NOT NULL,
@@ -117,7 +118,8 @@ def init_db():
             'ocr_enabled': "ALTER TABLE task_status ADD COLUMN ocr_enabled INTEGER DEFAULT 0;",
             'cancellation_requested': "ALTER TABLE task_status ADD COLUMN cancellation_requested INTEGER DEFAULT 0;",
             'worker_pid': "ALTER TABLE task_status ADD COLUMN worker_pid INTEGER;",
-            'heartbeat_timestamp': "ALTER TABLE task_status ADD COLUMN heartbeat_timestamp REAL;"
+            'heartbeat_timestamp': "ALTER TABLE task_status ADD COLUMN heartbeat_timestamp REAL;",
+            'pdf_optimization_level': "ALTER TABLE task_status ADD COLUMN pdf_optimization_level INTEGER DEFAULT 1;"
         }
 
         # Legacy column migration example
@@ -234,7 +236,7 @@ def update_task_in_db(task_id, status=None, message=None, progress=None,
 
 def process_pdf_task(task_id, input_pdf_path, output_file_path, dpi,
                      original_input_filename,
-                     page_raster_format, jpeg_raster_quality, output_target_format,
+                     page_raster_format, pdf_optimization_level, output_target_format,
                      ocr_enabled):
 
     # --- Task Start: Announce PID and Initial Heartbeat ---
@@ -247,10 +249,12 @@ def process_pdf_task(task_id, input_pdf_path, output_file_path, dpi,
         cleanup_and_delete_task_record(task_id)
         return
 
+    jpeg_raster_quality = 75 # Hardcoded as requested
     app.logger.info(
         f"Task {task_id} ({original_input_filename}) processing. Target: {output_target_format.upper()}. "
         f"DPI: {dpi}, Page Raster Format: {page_raster_format}, "
-        f"JPEG Quality: {jpeg_raster_quality if page_raster_format == 'jpeg' else 'N/A'}, "
+        f"JPEG Quality: {jpeg_raster_quality if page_raster_format == 'jpeg' else 'N/A'} (fixed), "
+        f"PDF Optimization: {pdf_optimization_level if output_target_format == 'pdf' else 'N/A'}, "
         f"OCR Enabled: {ocr_enabled}. "
         f"Thread: {threading.current_thread().name}"
     )
@@ -490,7 +494,7 @@ def process_pdf_task(task_id, input_pdf_path, output_file_path, dpi,
                     optimization_command = [
                         'ocrmypdf', 
                         '--tesseract-timeout', '0', 
-                        '--optimize', '1', 
+                        '--optimize', str(pdf_optimization_level), 
                         '--skip-text', 
                         unoptimized_pdf_path, 
                         output_file_path
@@ -588,10 +592,11 @@ def upload_file():
         try: dpi = int(request.form.get('dpi', '72'));_ = (10 <= dpi <= 600) or exec("raise ValueError")
         except: dpi = 72
         page_raster_format = request.form.get('image_format', 'jpeg').lower();_ = (page_raster_format in ['jpeg', 'png']) or exec("page_raster_format='jpeg'")
-        jpeg_quality_val = None
-        if page_raster_format == 'jpeg':
-            try: jpeg_quality_val = int(request.form.get('jpeg_quality', '75'));_ = (1 <= jpeg_quality_val <= 100) or exec("raise ValueError")
-            except: jpeg_quality_val = 75
+        
+        # JPEG quality is now fixed. PDF optimization level is the new parameter.
+        try: pdf_optimization_level = int(request.form.get('pdf_optimization_level', '1'));_ = (1 <= pdf_optimization_level <= 3) or exec("raise ValueError")
+        except: pdf_optimization_level = 1
+        
         output_target_format = request.form.get('output_target_format', 'pdf').lower();_ = (output_target_format in ['pdf', 'image']) or exec("output_target_format='pdf'")
         ocr_enabled = request.form.get('ocr_enabled', 'false').lower() == 'true'
         if output_target_format == 'image' and not Image: return jsonify({'error': 'Server configuration error: Image processing (Pillow) is not available.'}), 503
@@ -612,10 +617,11 @@ def upload_file():
         try:
             conn = get_db_connection()
             current_time = time.time()
+            # Note: The 'jpeg_quality' column is now ignored and receives NULL.
             conn.execute(f"""
-                INSERT INTO task_status (task_id, status, message, input_path, output_path, original_filename, user_facing_output_filename, dpi, page_raster_format, jpeg_quality, output_target_format, ocr_enabled, timestamp_created, timestamp_last_updated)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (task_id, 'queued', 'Queued for processing.', input_pdf_path, output_path, original_filename_secure, user_facing_dl_name, dpi, page_raster_format, jpeg_quality_val, output_target_format, 1 if ocr_enabled else 0, current_time, current_time))
+                INSERT INTO task_status (task_id, status, message, input_path, output_path, original_filename, user_facing_output_filename, dpi, page_raster_format, jpeg_quality, output_target_format, ocr_enabled, pdf_optimization_level, timestamp_created, timestamp_last_updated)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (task_id, 'queued', 'Queued for processing.', input_pdf_path, output_path, original_filename_secure, user_facing_dl_name, dpi, page_raster_format, None, output_target_format, 1 if ocr_enabled else 0, pdf_optimization_level, current_time, current_time))
             conn.commit()
         except sqlite3.Error as e:
             if os.path.exists(input_pdf_path): os.remove(input_pdf_path)
@@ -623,7 +629,7 @@ def upload_file():
         finally:
             if conn: conn.close()
 
-        pdf_processor_executor.submit(process_pdf_task, task_id, input_pdf_path, output_path, dpi, original_filename_secure, page_raster_format, jpeg_quality_val, output_target_format, ocr_enabled)
+        pdf_processor_executor.submit(process_pdf_task, task_id, input_pdf_path, output_path, dpi, original_filename_secure, page_raster_format, pdf_optimization_level, output_target_format, ocr_enabled)
         app.logger.info(f"Task {task_id} ({original_filename_secure}) submitted for processing.")
         return jsonify({'task_id': task_id, 'message': 'File upload successful, processing queued.'})
     else:
