@@ -128,6 +128,33 @@
 									<label for="format-png">PNG</label>
 								</div>
 							</div>
+							<!-- JPEG Quality sub-group -->
+							<div class="sub-group" id="jpeg-quality-group" style="display: none;">
+								<label for="jpeg-quality" class="form-label-small">JPEG Quality</label>
+								<div class="range-input-wrapper">
+									<input
+										type="range"
+										class="form-range"
+										id="jpeg-quality"
+										name="jpeg_quality"
+										value="85"
+										min="10"
+										max="100"
+										step="1"
+									/>
+									<div class="range-value-input-group">
+										<input
+											type="number"
+											id="jpeg-quality-number-input"
+											class="range-number-input"
+											value="85"
+											min="10"
+											max="100"
+										/>
+										<span>%</span>
+									</div>
+								</div>
+							</div>
 							<!-- Compression Level sub-group -->
 							<div class="sub-group" id="pdf-optimization-level-group">
 								<label for="pdf-optimization-level-1" class="form-label-small">Compression Level</label>
@@ -160,7 +187,7 @@
 				</div>
 
 				<footer class="settings-footer">
-					v0.7.1 | by <a href="https://linjin.me" target="_blank">Jin</a> with
+					v0.7.2 | by <a href="https://linjin.me" target="_blank">Jin</a> with
 					<a
 						href="https://developers.googleblog.com/en/gemini-2-5-thinking-model-updates/"
 						target="_blank"

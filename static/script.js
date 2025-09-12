@@ -16,6 +16,10 @@ document.addEventListener('DOMContentLoaded', function () {
     const ocrEnabledInput = document.getElementById('ocr_enabled'); // ADDED
     const ocrOptionsGroup = document.getElementById('ocr-options-group');
     const pdfOptimizationLevelGroup = document.getElementById('pdf-optimization-level-group');
+    const jpegQualityGroup = document.getElementById('jpeg-quality-group');
+    const jpegQualityInput = document.getElementById('jpeg-quality');
+    const jpegQualityNumberInput = document.getElementById('jpeg-quality-number-input');
+    const imageFormatRadios = document.querySelectorAll('input[name="image_format"]');
     const imageTypeGroup = document.getElementById('image-type-group'); // New
     const outputFormatRadios = document.querySelectorAll('input[name="output_target_format"]');
 
@@ -54,8 +58,10 @@ document.addEventListener('DOMContentLoaded', function () {
 
         // Setup two-way data binding for range sliders and number inputs
         setupRangeInputSync(dpiInput, dpiNumberInput);
+        setupRangeInputSync(jpegQualityInput, jpegQualityNumberInput);
         
         outputFormatRadios.forEach(radio => radio.addEventListener('change', togglePdfSpecificOptions));
+        imageFormatRadios.forEach(radio => radio.addEventListener('change', togglePdfSpecificOptions));
         togglePdfSpecificOptions();
 
         loadState();
@@ -149,7 +155,7 @@ document.addEventListener('DOMContentLoaded', function () {
         const currentSettings = {
             dpi: dpiInput.value,
             pageRasterFormat: document.querySelector('input[name="image_format"]:checked').value,
-            // jpegQuality is removed
+            jpegQuality: jpegQualityInput.value,
             outputTargetFormat: document.querySelector('input[name="output_target_format"]:checked').value,
             ocrEnabled: ocrEnabledInput.checked,
             pdfOptimizationLevel: document.querySelector('input[name="pdf_optimization_level"]:checked').value, // MODIFIED
@@ -216,6 +222,9 @@ document.addEventListener('DOMContentLoaded', function () {
         // jpeg_quality is removed
         formData.append('output_target_format', currentItem.settings.outputTargetFormat);
         formData.append('ocr_enabled', currentItem.settings.ocrEnabled);
+        if (currentItem.settings.outputTargetFormat === 'image' && currentItem.settings.pageRasterFormat === 'jpeg') {
+            formData.append('jpeg_quality', currentItem.settings.jpegQuality);
+        }
         if (currentItem.settings.outputTargetFormat === 'pdf') { // Only send if relevant
             formData.append('pdf_optimization_level', currentItem.settings.pdfOptimizationLevel);
         }
@@ -495,6 +504,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
     function togglePdfSpecificOptions() {
         const selectedFormat = document.querySelector('input[name="output_target_format"]:checked').value;
+        const selectedImageType = document.querySelector('input[name="image_format"]:checked').value;
         const isPdfOutput = selectedFormat === 'pdf';
 
         // Options only visible for PDF output
@@ -503,6 +513,10 @@ document.addEventListener('DOMContentLoaded', function () {
         
         // Option only visible for Image output
         imageTypeGroup.style.display = isPdfOutput ? 'none' : 'block';
+
+        // JPEG quality slider logic - for JPEG output
+        const isJpegImageOutput = !isPdfOutput && selectedImageType === 'jpeg';
+        jpegQualityGroup.style.display = isJpegImageOutput ? 'block' : 'none';
 
         if (isPdfOutput) {
             // When outputting to PDF, the intermediate page rasterization
@@ -547,7 +561,8 @@ document.addEventListener('DOMContentLoaded', function () {
             dpi: 72,
             imageFormat: 'png',
             ocrEnabled: true,
-            pdfOptimizationLevel: '1', // MODIFIED
+            pdfOptimizationLevel: '1',
+            jpegQuality: 85,
         };
 
         // Set output format radio
@@ -560,10 +575,14 @@ document.addEventListener('DOMContentLoaded', function () {
         // Set image format radio
         document.getElementById('format-jpeg').checked = true;
 
+        // Set JPEG Quality
+        jpegQualityInput.value = defaults.jpegQuality;
+        jpegQualityNumberInput.value = defaults.jpegQuality;
+
         // Set OCR
         ocrEnabledInput.checked = defaults.ocrEnabled;
 
-        // Set PDF Optimization Level (MODIFIED)
+        // Set PDF Optimization Level
         document.getElementById('pdf-optimization-level-1').checked = true;
         
         // Ensure UI consistency for conditional fields
