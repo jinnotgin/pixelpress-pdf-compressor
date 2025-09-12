@@ -1,26 +1,33 @@
 # PixelPress PDF Compressor
 
-A web-based tool to compress large PDFs (especially from design tools like Figma) by rasterizing pages into images, or to combine all pages of a PDF into a single, large image.
+A web-based tool to compress large PDFs, make them searchable via OCR, or combine all pages into a single image. It's especially effective on large, image-heavy PDFs exported from design tools like Figma.
 
 <kbd><img width="1306" alt="image" src="https://github.com/user-attachments/assets/c7f6ca67-02e1-4806-9e40-f02a794570f8" /></kbd>
 
-It features a multi-file upload queue, real-time progress tracking, and customizable output settings, all managed through a clean and simple web interface. The included setup scripts provide a fully automated environment configuration for macOS.
+It features a multi-file upload queue, real-time progress tracking, and customizable output settings (including OCR and compression levels), all managed through a clean and simple web interface. The included setup scripts provide a fully automated environment configuration for macOS.
 
 ## Why PixelPress?
 
-Design tools like Figma often export PDFs with enormous file sizes due to complex vector data, making them difficult to share. PixelPress solves this problem by converting each page into a lightweight, rasterized image (like a JPEG or PNG) and then packaging those images into a new, much smaller PDF. This makes the files significantly easier to store, share, and view, while retaining visual fidelity.
+Design tools like Figma often export PDFs with enormous file sizes due to complex vector data, making them difficult to share. Scanned documents are often just images, making them impossible to search. PixelPress solves these problems:
+
+1.  **Compression:** It converts each page into a lightweight, rasterized image (like a JPEG or PNG) and then packages those images into a new, much smaller PDF.
+2.  **Searchability:** It can perform Optical Character Recognition (OCR) on the document's pages, adding a hidden text layer that makes the entire PDF content searchable.
+
+This makes files significantly easier to store, share, view, and search, while retaining visual fidelity.
 
 ## Core Features
 
--   **Compress PDFs:** Converts complex vector pages into optimized images (JPEG/PNG) within a new PDF, often resulting in a dramatic reduction in file size.
+-   **Compress PDFs:** Converts complex vector or image pages into optimized images (JPEG/PNG) within a new PDF, often resulting in a dramatic reduction in file size.
+-   **Searchable PDF Creation (OCR):** Uses the powerful Tesseract engine to add a text layer to your PDF, making its content fully searchable and selectable.
 -   **Combine to Image:** Stitches all PDF pages vertically into a single, downloadable image file.
 -   **Asynchronous & Queued Processing:** Upload multiple files at once. The server processes them one by one in the background so you don't have to wait.
 -   **Live Progress Tracking:** Monitor the real-time status of your files, from "Queued" to "Processing" to "Completed", with a progress bar.
 -   **Customizable Output:**
     -   Choose between **PDF** or a single **stitched Image** as your final output.
     -   Control the **DPI (Dots Per Inch)** for image quality.
-    -   Select the internal **image format (JPEG/PNG)**.
-    -   Adjust **JPEG quality** for a perfect balance between size and quality.
+    -   For image output, select the **image format (JPEG/PNG)**.
+    -   For PDF output, set a **PDF Compression Level**.
+    -   Enable **OCR (Optical Character Recognition)** to create searchable PDFs.
 -   **Task Management:** Cancel in-progress jobs or clear completed/failed items from your history. Your session is remembered in your browser via `localStorage`.
 -   **Drag & Drop Interface:** A modern, user-friendly UI for easy file uploads.
 -   **Memory Efficient:** Uses a tiling strategy to process very high-resolution pages without running out of memory.
@@ -28,7 +35,7 @@ Design tools like Figma often export PDFs with enormous file sizes due to comple
 
 ## Technology Stack
 
--   **Backend:** Python 3, Flask, PyMuPDF, Pillow
+-   **Backend:** Python 3, Flask, PyMuPDF, Pillow, Tesseract, ocrmypdf
 -   **Database:** SQLite
 -   **Frontend:** HTML, Bootstrap, Vanilla JavaScript (Fetch API)
 -   **WSGI Server:** Gunicorn
@@ -44,7 +51,7 @@ These scripts provide a one-click setup and run experience on **macOS**.
     ```bash
     xcode-select --install
     ```
--   **Homebrew**: The script will install this for you if it's missing.
+-   **Homebrew**: The script will install this for you if it's missing. The script will also use Homebrew to install all other dependencies like Python, Tesseract, and ocrmypdf.
 
 ### Step 1: Clone the Repository
 
@@ -64,6 +71,7 @@ chmod +x setup.sh
 
 The script will perform the following actions:
 -   ✅ Install **Homebrew** (if not present).
+-   ✅ Install backend tools like **Tesseract** and **ocrmypdf**.
 -   ✅ Install **pyenv** and the **pyenv-virtualenv** plugin.
 -   ✅ Configure your shell (`.zshrc` or `.bash_profile`) for `pyenv`.
 -   ✅ Install the latest patch version of Python 3.12 (or as configured in the script).
@@ -94,7 +102,25 @@ To stop the server, simply press `Ctrl+C` in the terminal where it's running.
 
 If you are not on macOS or prefer a manual setup, follow these steps.
 
-### 1. Create and Activate a Virtual Environment
+### 1. Install System Dependencies
+
+You need to install Python 3.8+, Tesseract, and ocrmypdf using your system's package manager.
+
+**On Debian/Ubuntu:**
+```bash
+sudo apt-get update
+sudo apt-get install python3 python3-venv python3-pip tesseract-ocr ocrmypdf
+```
+
+**On Fedora/CentOS:**
+```bash
+sudo dnf install python3 python3-venv python3-pip tesseract ocrmypdf
+```
+
+**On Mac / Windows:**
+Manual installation of Tesseract is required. You can find installation information on the [OCRmyPDF](https://ocrmypdf.readthedocs.io/en/latest/installation.html) page.
+
+### 2. Create and Activate a Virtual Environment
 
 It's highly recommended to use a virtual environment.
 
@@ -109,7 +135,7 @@ source venv/bin/activate
 .\venv\Scripts\activate
 ```
 
-### 2. Install Dependencies
+### 3. Install Python Dependencies
 
 Install the required packages using pip.
 
@@ -118,7 +144,7 @@ pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-### 3. Run the Application
+### 4. Run the Application
 
 You can run the app using the simple Flask development server (good for debugging) or Gunicorn (for performance).
 
@@ -128,25 +154,28 @@ python app.py
 ```
 The application will be available at `http://127.0.0.1:7001`.
 
-**Option B: Gunicorn (Production)**
+**Option B: Gunicorn (Production, Linux/macOS)**
 ```bash
 gunicorn --workers 4 --threads 2 --bind 0.0.0.0:7001 app:app
 ```
 
 ## How It Works
 
-1.  **Upload:** A user selects one or more PDF files and their desired output settings via the web UI.
+1.  **Upload:** A user selects one or more PDF files and their desired output settings (DPI, OCR, compression, etc.) via the web UI.
 2.  **Queue:** The Flask backend receives each file, creates a unique task ID, and stores the job's metadata in an SQLite database. The task is marked as `queued`.
 3.  **Background Processing:** The task is submitted to a background `ThreadPoolExecutor`.
-4.  **Rasterization:** A worker thread picks up the task. It uses the **PyMuPDF** library to iterate through each page of the PDF.
-5.  **Tiling:** For each page, it's rasterized into an image at the specified DPI. A memory-saving tiling method is used to handle very large pages without crashing.
-6.  **Assembly:**
-    -   If the output is **PDF**, the generated page images are inserted into a new, clean PDF document.
-    -   If the output is **Image**, the page images are stitched together vertically using the **Pillow** library.
+4.  **Rasterization:** A worker thread picks up the task. It uses the **PyMuPDF** library to iterate through each page of the PDF. A memory-saving tiling method is used to rasterize very large pages into images at the specified DPI without crashing.
+5.  **Assembly & Processing:** The workflow depends on the user's chosen output:
+    *   **Standard PDF:** The generated page images are inserted directly into a new, clean PDF document using PyMuPDF. This new PDF is then passed to `ocrmypdf` for a final optimization pass (without OCR).
+    *   **Searchable PDF (OCR):** The rasterized page images are saved to a temporary directory. **Tesseract** processes these images to create a new PDF with an embedded, searchable text layer. This searchable PDF is then passed to `ocrmypdf` for final optimization.
+    *   **Stitched Image:** The page images are stitched together vertically into one large image file using the **Pillow** library.
+6.  **PDF Optimization:** For PDF outputs, an additional optimization step is performed using `ocrmypdf` based on the selected "Compression Level":
+    *   **High (i.e. Level 1):** Applies lossless optimizations (e.g., better image encoding, stream compression).
+    *   **Extreme (i.e. Level 3):** Includes all Level 1 optimizations, plus more aggresive lossy optimizations (like color quantization), for the smallest possible file size, potentially at the cost of some quality.
 7.  **Status Updates:** The frontend periodically polls a status API endpoint to update the UI with the task's progress (`processing`, `completed`, `failed`).
 8.  **Download:** Once a task is `completed`, a download link is provided to the user. The backend serves the processed file from the `processed` directory.
 
 ## Acknowledgments
 
-- This project relies on several fantastic open-source libraries: **Flask**, **PyMuPDF**, and **Pillow**.
+- This project relies on several fantastic open-source libraries: **Flask**, **PyMuPDF**, **Pillow**, **Tesseract OCR**, and **ocrmypdf**.
 - The concept and code structure were bootstrapped with the assistance of Google's Gemini Pro 2.5.
