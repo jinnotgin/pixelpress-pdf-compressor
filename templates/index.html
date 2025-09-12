@@ -159,16 +159,16 @@
 							<div class="sub-group" id="pdf-optimization-level-group">
 								<label for="pdf-optimization-level-1" class="form-label-small">Compression Level</label>
 								<div class="segmented-control">
-									<input type="radio" id="pdf-optimization-level-0" name="pdf_optimization_level" value="0" checked />
-									<label for="pdf-optimization-level-0" title="No extra compression. Faster viewing on all devices.">Default</label>
-									<input type="radio" id="pdf-optimization-level-1" name="pdf_optimization_level" value="1" />
+									<!-- <input type="radio" id="pdf-optimization-level-0" name="pdf_optimization_level" value="0" /> -->
+									<!-- <label for="pdf-optimization-level-0" title="No extra compression. Faster viewing on all devices.">Default</label> -->
+									<input type="radio" id="pdf-optimization-level-1" name="pdf_optimization_level" value="1" checked/>
 									<label for="pdf-optimization-level-1" title="High quality, larger file size.">High</label>
 									<input type="radio" id="pdf-optimization-level-3" name="pdf_optimization_level" value="3" />
 									<label for="pdf-optimization-level-3" class="label-extreme-option" title="Smallest file size, lower image quality.">Extreme</label>
 								</div>
-								<p class="form-group-explanation">
+								<!-- <p class="form-group-explanation">
 									Higher compression reduces file size, but can make PDFs lag on weaker devices.
-								</p>
+								</p> -->
 							</div>
 						</div>
 						<!-- OCR Options Group -->
@@ -192,7 +192,7 @@
 				</div>
 
 				<footer class="settings-footer">
-					v0.7.3 | by <a href="https://linjin.me" target="_blank">Jin</a> with
+					v0.7.4 | by <a href="https://linjin.me" target="_blank">Jin</a> with
 					<a
 						href="https://developers.googleblog.com/en/gemini-2-5-thinking-model-updates/"
 						target="_blank"
