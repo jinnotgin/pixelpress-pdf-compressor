@@ -75,7 +75,7 @@ fi
 # 3. Ensure Python build dependencies are installed (macOS only)
 if [[ "$(uname)" == "Darwin" ]]; then
     echo "--> Ensuring Python build dependencies are installed..."
-    brew install openssl readline sqlite3 xz zlib tcl-tk@8 libb2 ocrmypdf
+    brew install openssl readline sqlite3 xz zlib tcl-tk@8 libb2 tesseract ocrmypdf
     echo "✅ Build dependencies are up to date."
 fi
 

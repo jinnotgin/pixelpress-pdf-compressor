@@ -15,7 +15,7 @@ document.addEventListener('DOMContentLoaded', function () {
     const dpiNumberInput = document.getElementById('dpi-number-input'); // New
     const ocrEnabledInput = document.getElementById('ocr_enabled'); // ADDED
     const ocrOptionsGroup = document.getElementById('ocr-options-group');
-    const compressionLevelGroup = document.getElementById('compression-level-group');
+    const pdfOptimizationLevelGroup = document.getElementById('pdf-optimization-level-group');
     const imageTypeGroup = document.getElementById('image-type-group'); // New
     const outputFormatRadios = document.querySelectorAll('input[name="output_target_format"]');
 
@@ -152,7 +152,7 @@ document.addEventListener('DOMContentLoaded', function () {
             // jpegQuality is removed
             outputTargetFormat: document.querySelector('input[name="output_target_format"]:checked').value,
             ocrEnabled: ocrEnabledInput.checked,
-            compressionLevel: document.querySelector('input[name="compression_level"]:checked').value, // MODIFIED
+            pdfOptimizationLevel: document.querySelector('input[name="pdf_optimization_level"]:checked').value, // MODIFIED
         };
 
         const activeFileKeys = new Set(fileItems.filter(item => ['pending', 'processing', 'uploading'].includes(item.status)).map(item => item.originalFilename + item.settings.outputTargetFormat + item.settings.pageRasterFormat + item.settings.dpi));
@@ -217,7 +217,7 @@ document.addEventListener('DOMContentLoaded', function () {
         formData.append('output_target_format', currentItem.settings.outputTargetFormat);
         formData.append('ocr_enabled', currentItem.settings.ocrEnabled);
         if (currentItem.settings.outputTargetFormat === 'pdf') { // Only send if relevant
-            formData.append('compression_level', currentItem.settings.compressionLevel);
+            formData.append('pdf_optimization_level', currentItem.settings.pdfOptimizationLevel);
         }
 
         updateItemState(currentItem, { status: 'uploading', message: 'Uploading file...', progress: 0 });
@@ -499,15 +499,15 @@ document.addEventListener('DOMContentLoaded', function () {
 
         // Options only visible for PDF output
         ocrOptionsGroup.style.display = isPdfOutput ? 'block' : 'none';
-        compressionLevelGroup.style.display = isPdfOutput ? 'block' : 'none';
+        pdfOptimizationLevelGroup.style.display = isPdfOutput ? 'block' : 'none';
         
         // Option only visible for Image output
         imageTypeGroup.style.display = isPdfOutput ? 'none' : 'block';
 
         if (isPdfOutput) {
             // When outputting to PDF, the intermediate page rasterization
-            // will be forced to JPEG for better compression.
-            document.getElementById('format-jpeg').checked = true;
+            // will be forced to PNG for better quality.
+            document.getElementById('format-png').checked = true;
         }
     }
     
@@ -545,9 +545,9 @@ document.addEventListener('DOMContentLoaded', function () {
         const defaults = {
             outputFormat: 'pdf',
             dpi: 72,
-            imageFormat: 'jpeg',
+            imageFormat: 'png',
             ocrEnabled: true,
-            compressionLevel: '1', // MODIFIED
+            pdfOptimizationLevel: '1', // MODIFIED
         };
 
         // Set output format radio
@@ -563,8 +563,8 @@ document.addEventListener('DOMContentLoaded', function () {
         // Set OCR
         ocrEnabledInput.checked = defaults.ocrEnabled;
 
-        // Set Compression Level (MODIFIED)
-        document.getElementById('comp-level-1').checked = true;
+        // Set PDF Optimization Level (MODIFIED)
+        document.getElementById('pdf-optimization-level-1').checked = true;
         
         // Ensure UI consistency for conditional fields
         togglePdfSpecificOptions();

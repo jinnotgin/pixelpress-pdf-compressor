@@ -249,7 +249,7 @@ def process_pdf_task(task_id, input_pdf_path, output_file_path, dpi,
         cleanup_and_delete_task_record(task_id)
         return
 
-    jpeg_raster_quality = 75 # Hardcoded as requested
+    jpeg_raster_quality = 90 # Hardcoded as requested
     app.logger.info(
         f"Task {task_id} ({original_input_filename}) processing. Target: {output_target_format.upper()}. "
         f"DPI: {dpi}, Page Raster Format: {page_raster_format}, "
@@ -261,8 +261,10 @@ def process_pdf_task(task_id, input_pdf_path, output_file_path, dpi,
     update_task_in_db(task_id, message='Preparing: Opening your PDF...', progress=5, update_heartbeat=True)
 
     # --- Dependency Checks ---
-    if ocr_enabled and output_target_format == 'pdf' and not shutil.which('ocrmypdf'):
-        error_msg = "Server configuration error: OCR is enabled but 'ocrmypdf' command was not found."
+    # if ocr_enabled and output_target_format == 'pdf' and not shutil.which('ocrmypdf'):
+    #     error_msg = "Server configuration error: OCR is enabled but 'ocrmypdf' command was not found."
+    if ocr_enabled and output_target_format == 'pdf' and not shutil.which('tesseract'):
+        error_msg = "Server configuration error: OCR is enabled but 'tesseract' command was not found."
         update_task_in_db(task_id, status='failed', message=error_msg)
         app.logger.error(f"Task {task_id}: {error_msg}")
         return
@@ -431,53 +433,99 @@ def process_pdf_task(task_id, input_pdf_path, output_file_path, dpi,
             if output_target_format == 'pdf':
                 unoptimized_pdf_path = os.path.join(temp_processing_dir, "unoptimized.pdf")
                 if ocr_enabled:
+                    if check_cancellation(task_id):
+                        app.logger.info(f"Task {task_id} cancelled by user before OCR step.")
+                        cleanup_and_delete_task_record(task_id)
+                        return
                     num_pages_to_ocr = len(temp_image_files_for_stitching_or_ocr)
-                    update_task_in_db(task_id, progress=88, message=f"Preparing to apply OCR to {num_pages_to_ocr} pages...", update_heartbeat=True)
+                    #update_task_in_db(task_id, progress=88, message=f"Preparing to apply OCR to {num_pages_to_ocr} pages...", update_heartbeat=True)
+                    update_task_in_db(task_id, progress=88, message=f"Applying OCR to {num_pages_to_ocr} pages (this may take a while)...", update_heartbeat=True)
                     
-                    individual_ocr_pdfs = []
-                    for i, img_path in enumerate(temp_image_files_for_stitching_or_ocr):
-                        page_num_human = i + 1
-                        if check_cancellation(task_id):
-                            app.logger.info(f"Task {task_id} cancelled by user during per-page OCR.")
-                            cleanup_and_delete_task_record(task_id)
-                            return
+                    ### NOTE: ocrmypdf converts the image into a PDF first (it would seem)
+                    ### this creates unnecessary artefacts in image imo
+                    ### hence, we are switching to using teserract directly
+                    # 
+                    # individual_ocr_pdfs = []
+                    # for i, img_path in enumerate(temp_image_files_for_stitching_or_ocr):
+                    #     page_num_human = i + 1
+                    #     if check_cancellation(task_id):
+                    #         app.logger.info(f"Task {task_id} cancelled by user during per-page OCR.")
+                    #         cleanup_and_delete_task_record(task_id)
+                    #         return
 
-                        update_task_in_db(task_id, message=f"Applying OCR: Page {page_num_human} of {num_pages_to_ocr} (this may take a while)...", update_heartbeat=True)
+                    #     update_task_in_db(task_id, message=f"Applying OCR: Page {page_num_human} of {num_pages_to_ocr} (this may take a while)...", update_heartbeat=True)
                         
-                        single_page_output_pdf = os.path.join(temp_processing_dir, f"ocr_page_{i:04d}.pdf")
+                    #     single_page_output_pdf = os.path.join(temp_processing_dir, f"ocr_page_{i:04d}.pdf")
                         
-                        ocr_command = [
-                            'ocrmypdf',
-                            '--optimize', '0',          # Disable file size optimization
-                            '--output-type', 'pdf',     # Disable PDF/A generation
-                            '--fast-web-view', '999999', # Disable fast web view optimization
-                            '--image-dpi', str(dpi),
-                            '--tesseract-timeout', '600',
-                            img_path,
-                            single_page_output_pdf
-                        ]
-                        app.logger.info(f"Task {task_id}: Running OCR for page {page_num_human}: {' '.join(ocr_command)}")
+                    #     ocr_command = [
+                    #         'ocrmypdf',
+                    #         '-l', 'eng',
+                    #         '--optimize', '0',          # Disable file size optimization
+                    #         '--output-type', 'pdf',     # Disable PDF/A generation
+                    #         '--fast-web-view', '999999', # Disable fast web view optimization
+                    #         '--image-dpi', str(dpi),
+                    #         '--tesseract-timeout', '600',
+                    #         img_path,
+                    #         single_page_output_pdf
+                    #     ]
+                    #     app.logger.info(f"Task {task_id}: Running OCR for page {page_num_human}: {' '.join(ocr_command)}")
                         
-                        try:
-                            result = subprocess.run(ocr_command, check=True, capture_output=True, text=True, encoding='utf-8')
-                            app.logger.info(f"Task {task_id}: OCR for page {page_num_human} completed. STDOUT: {result.stdout}")
-                            individual_ocr_pdfs.append(single_page_output_pdf)
-                        except subprocess.CalledProcessError as e:
-                            error_msg = f"OCR processing failed on page {page_num_human}. See server logs for details."
-                            app.logger.error(f"Task {task_id} OCR failed. Command: '{' '.join(e.cmd)}'. Return code: {e.returncode}. STDERR: {e.stderr}")
-                            update_task_in_db(task_id, status='failed', message=error_msg)
-                            return
+                    #     try:
+                    #         result = subprocess.run(ocr_command, check=True, capture_output=True, text=True, encoding='utf-8')
+                    #         app.logger.info(f"Task {task_id}: OCR for page {page_num_human} completed. STDOUT: {result.stdout}")
+                    #         individual_ocr_pdfs.append(single_page_output_pdf)
+                    #     except subprocess.CalledProcessError as e:
+                    #         error_msg = f"OCR processing failed on page {page_num_human}. See server logs for details."
+                    #         app.logger.error(f"Task {task_id} OCR failed. Command: '{' '.join(e.cmd)}'. Return code: {e.returncode}. STDERR: {e.stderr}")
+                    #         update_task_in_db(task_id, status='failed', message=error_msg)
+                    #         return
 
-                    # Merge the individual OCR'd PDFs into a single file
-                    update_task_in_db(task_id, progress=92, message="Finalising: Merging OCR'd pages...", update_heartbeat=True)
-                    merged_doc = fitz.open()
-                    for pdf_path in individual_ocr_pdfs:
-                        with fitz.open(pdf_path) as single_page_doc:
-                            merged_doc.insert_pdf(single_page_doc)
+                    # # Merge the individual OCR'd PDFs into a single file
+                    # update_task_in_db(task_id, progress=92, message="Finalising: Merging OCR'd pages...", update_heartbeat=True)
+                    # merged_doc = fitz.open()
+                    # for pdf_path in individual_ocr_pdfs:
+                    #     with fitz.open(pdf_path) as single_page_doc:
+                    #         merged_doc.insert_pdf(single_page_doc)
                     
-                    # Save the merged document to the unoptimized path for the final step
-                    merged_doc.save(unoptimized_pdf_path, garbage=4, deflate=True, clean=True)
-                    merged_doc.close()
+                    # # Save the merged document to the unoptimized path for the final step
+                    # merged_doc.save(unoptimized_pdf_path, garbage=4, deflate=True, clean=True)
+                    # merged_doc.close()
+
+                    # Create a file containing the list of images for Tesseract
+                    image_list_file_path = os.path.join(temp_processing_dir, 'image_list.txt')
+                    with open(image_list_file_path, 'w', encoding='utf-8') as f:
+                        for img_path in temp_image_files_for_stitching_or_ocr:
+                            f.write(f"{img_path}\n")
+
+                    # The output from Tesseract will be unoptimized.pdf. We give it the prefix 'unoptimized'.
+                    output_prefix = os.path.join(temp_processing_dir, "unoptimized")
+
+                    # Tesseract automatically appends .pdf to the output prefix
+                    ocr_command = [
+                        'tesseract',
+                        image_list_file_path,
+                        output_prefix,
+                        '-l', 'eng',
+                        # '--dpi', str(dpi),
+                        'pdf'
+                    ]
+                    app.logger.info(f"Task {task_id}: Running Tesseract for all pages: {' '.join(ocr_command)}")
+
+                    try:
+                        # Set a generous timeout based on the number of pages
+                        timeout_seconds = 180 * num_pages_to_ocr
+                        result = subprocess.run(ocr_command, check=True, capture_output=True, text=True, encoding='utf-8', timeout=timeout_seconds)
+                        app.logger.info(f"Task {task_id}: Tesseract completed. STDOUT: {result.stdout}")
+                    except subprocess.CalledProcessError as e:
+                        error_msg = "Tesseract OCR processing failed. See server logs for details."
+                        app.logger.error(f"Task {task_id} Tesseract OCR failed. Command: '{' '.join(e.cmd)}'. Return code: {e.returncode}. STDERR: {e.stderr}")
+                        update_task_in_db(task_id, status='failed', message=error_msg)
+                        return
+                    except subprocess.TimeoutExpired as e:
+                        error_msg = "Tesseract OCR processing timed out. The document may be too complex."
+                        app.logger.error(f"Task {task_id} Tesseract OCR timed out. Command: '{' '.join(e.cmd)}'.")
+                        update_task_in_db(task_id, status='failed', message=error_msg)
+                        return
                 else:
                     update_task_in_db(task_id, progress=90, message="Finalising: Saving intermediate PDF...", update_heartbeat=True)
                     output_doc_for_pdf.save(unoptimized_pdf_path, garbage=4, deflate=True, deflate_images=True, clean=True)
