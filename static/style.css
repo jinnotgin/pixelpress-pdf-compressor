@@ -249,6 +249,13 @@ body {
 	color: var(--primary-color);
 	font-weight: 600;
 }
+.segmented-control input[type="radio"]:checked + label.label-extreme-option {
+	background-color: var(--error-color);
+	color: white;
+}
+.segmented-control input[type="radio"]:checked + label.label-extreme-option:hover {
+	background-color: #d53939; /* A darker shade of red */
+}
 
 /* ===== BUTTONS ===== */
 .button-primary {
