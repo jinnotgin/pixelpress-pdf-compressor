@@ -561,7 +561,7 @@ document.addEventListener('DOMContentLoaded', function () {
             dpi: 72,
             imageFormat: 'png',
             ocrEnabled: true,
-            pdfOptimizationLevel: '1',
+            pdfOptimizationLevel: '0',
             jpegQuality: 85,
         };
 
@@ -583,7 +583,7 @@ document.addEventListener('DOMContentLoaded', function () {
         ocrEnabledInput.checked = defaults.ocrEnabled;
 
         // Set PDF Optimization Level
-        document.getElementById('pdf-optimization-level-1').checked = true;
+        document.getElementById('pdf-optimization-level-0').checked = true;
         
         // Ensure UI consistency for conditional fields
         togglePdfSpecificOptions();

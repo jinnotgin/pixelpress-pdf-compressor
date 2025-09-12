@@ -159,11 +159,16 @@
 							<div class="sub-group" id="pdf-optimization-level-group">
 								<label for="pdf-optimization-level-1" class="form-label-small">Compression Level</label>
 								<div class="segmented-control">
-									<input type="radio" id="pdf-optimization-level-1" name="pdf_optimization_level" value="1" checked />
+									<input type="radio" id="pdf-optimization-level-0" name="pdf_optimization_level" value="0" checked />
+									<label for="pdf-optimization-level-0" title="No extra compression. Faster viewing on all devices.">Default</label>
+									<input type="radio" id="pdf-optimization-level-1" name="pdf_optimization_level" value="1" />
 									<label for="pdf-optimization-level-1" title="High quality, larger file size.">High</label>
 									<input type="radio" id="pdf-optimization-level-3" name="pdf_optimization_level" value="3" />
 									<label for="pdf-optimization-level-3" class="label-extreme-option" title="Smallest file size, lower image quality.">Extreme</label>
 								</div>
+								<p class="form-group-explanation">
+									Higher compression reduces file size, but can make PDFs lag on weaker devices.
+								</p>
 							</div>
 						</div>
 						<!-- OCR Options Group -->
@@ -173,7 +178,7 @@
 								<input type="checkbox" id="ocr_enabled" name="ocr_enabled" value="true" checked />
 								<label for="ocr_enabled">Make text searchable & selectable</label>
 							</div>
-							<p class="form-group-explanation">
+							<p class="form-group-explanation" style="padding-left: 28px;">
 								Allows you to find and copy text in the PDF. Processing will take longer.
 							</p>
 						</div>

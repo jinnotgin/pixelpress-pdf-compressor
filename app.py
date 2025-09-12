@@ -646,7 +646,7 @@ def upload_file():
             jpeg_quality = 85
 
         # PDF optimization level = compression level in frontend.
-        try: pdf_optimization_level = int(request.form.get('pdf_optimization_level', '1'));_ = (1 <= pdf_optimization_level <= 3) or exec("raise ValueError")
+        try: pdf_optimization_level = int(request.form.get('pdf_optimization_level', '1'));_ = (0 <= pdf_optimization_level <= 3) or exec("raise ValueError")
         except: pdf_optimization_level = 1
         
         output_target_format = request.form.get('output_target_format', 'pdf').lower();_ = (output_target_format in ['pdf', 'image']) or exec("output_target_format='pdf'")
