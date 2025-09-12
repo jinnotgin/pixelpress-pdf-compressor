@@ -35,7 +35,7 @@ This makes files significantly easier to store, share, view, and search, while r
 
 ## Technology Stack
 
--   **Backend:** Python 3, Flask, PyMuPDF, Pillow, Tesseract, ocrmypdf
+-   **Backend:** Python 3, Flask, PyMuPDF, Pillow, ImageMagick, Tesseract, OCRmyPDF
 -   **Database:** SQLite
 -   **Frontend:** HTML, Bootstrap, Vanilla JavaScript (Fetch API)
 -   **WSGI Server:** Gunicorn
@@ -51,7 +51,7 @@ These scripts provide a one-click setup and run experience on **macOS**.
     ```bash
     xcode-select --install
     ```
--   **Homebrew**: The script will install this for you if it's missing. The script will also use Homebrew to install all other dependencies like Python, Tesseract, and ocrmypdf.
+-   **Homebrew**: The script will install this for you if it's missing. The script will also use Homebrew to install all other dependencies like Python, ImageMagick, Tesseract, and OCRmyPDF.
 
 ### Step 1: Clone the Repository
 
@@ -71,7 +71,7 @@ chmod +x setup.sh
 
 The script will perform the following actions:
 -   ✅ Install **Homebrew** (if not present).
--   ✅ Install backend tools like **Tesseract** and **ocrmypdf**.
+-   ✅ Install backend tools like **ImageMagick**, **Tesseract** and **ocrmypdf**.
 -   ✅ Install **pyenv** and the **pyenv-virtualenv** plugin.
 -   ✅ Configure your shell (`.zshrc` or `.bash_profile`) for `pyenv`.
 -   ✅ Install the latest patch version of Python 3.12 (or as configured in the script).
@@ -104,21 +104,21 @@ If you are not on macOS or prefer a manual setup, follow these steps.
 
 ### 1. Install System Dependencies
 
-You need to install Python 3.8+, Tesseract, and ocrmypdf using your system's package manager.
+You need to install Python 3.8+, ImageMagick, Tesseract, and ocrmypdf using your system's package manager.
 
 **On Debian/Ubuntu:**
 ```bash
 sudo apt-get update
-sudo apt-get install python3 python3-venv python3-pip tesseract-ocr ocrmypdf
+sudo apt-get install python3 python3-venv python3-pip imagemagick tesseract-ocr ocrmypdf
 ```
 
 **On Fedora/CentOS:**
 ```bash
-sudo dnf install python3 python3-venv python3-pip tesseract ocrmypdf
+sudo dnf install python3 python3-venv python3-pip imagemagick tesseract ocrmypdf
 ```
 
-**On Mac / Windows:**
-Manual installation of Tesseract is required. You can find installation information on the [OCRmyPDF](https://ocrmypdf.readthedocs.io/en/latest/installation.html) page.
+**On Windows:**
+Manual installation of ImageMagick, Tesseract and OCRmyPDF is required.
 
 ### 2. Create and Activate a Virtual Environment
 
@@ -168,7 +168,7 @@ gunicorn --workers 4 --threads 2 --bind 0.0.0.0:7001 app:app
 5.  **Assembly & Processing:** The workflow depends on the user's chosen output:
     *   **Standard PDF:** The generated page images are inserted directly into a new, clean PDF document using PyMuPDF. This new PDF is then passed to `ocrmypdf` for a final optimization pass (without OCR).
     *   **Searchable PDF (OCR):** The rasterized page images are saved to a temporary directory. **Tesseract** processes these images to create a new PDF with an embedded, searchable text layer. This searchable PDF is then passed to `ocrmypdf` for final optimization.
-    *   **Stitched Image:** The page images are stitched together vertically into one large image file using the **Pillow** library.
+    *   **Stitched Image:** The page images are stitched together vertically into one large image file using **ImageMagick**.
 6.  **PDF Optimization:** For PDF outputs, an additional optimization step is performed using `ocrmypdf` based on the selected "Compression Level":
     *   **High (i.e. Level 1):** Applies lossless optimizations (e.g., better image encoding, stream compression).
     *   **Extreme (i.e. Level 3):** Includes all Level 1 optimizations, plus more aggresive lossy optimizations (like color quantization), for the smallest possible file size, potentially at the cost of some quality.
@@ -177,5 +177,5 @@ gunicorn --workers 4 --threads 2 --bind 0.0.0.0:7001 app:app
 
 ## Acknowledgments
 
-- This project relies on several fantastic open-source libraries: **Flask**, **PyMuPDF**, **Pillow**, **Tesseract OCR**, and **ocrmypdf**.
+- This project relies on several fantastic open-source libraries: **Flask**, **PyMuPDF**, **Pillow**, **ImageMagick**, **Tesseract OCR**, and **OCRmyPDF**.
 - The concept and code structure were bootstrapped with the assistance of Google's Gemini Pro 2.5.

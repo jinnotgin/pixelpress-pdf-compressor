@@ -560,40 +560,75 @@ def process_pdf_task(task_id, input_pdf_path, output_file_path, dpi,
                     shutil.move(unoptimized_pdf_path, output_file_path)
 
             elif output_target_format == 'image':
+                # if not temp_image_files_for_stitching_or_ocr:
+                #     update_task_in_db(task_id, status='failed', message="Error: No page images were created.")
+                #     return
+
+                # update_task_in_db(task_id, progress=95, message="Finalising: Stitching images...", update_heartbeat=True)
+                # pil_page_images, final_image_pil = [], None
+                # try:
+                #     actual_max_width, actual_total_height = 0, 0
+                #     for i, temp_file_path in enumerate(temp_image_files_for_stitching_or_ocr):
+                #         if check_cancellation(task_id):
+                #             app.logger.info(f"Task {task_id} cancelled by user during image stitching.")
+                #             cleanup_and_delete_task_record(task_id)
+                #             return
+                #         img = Image.open(temp_file_path)
+                #         pil_page_images.append(img)
+                #         actual_max_width = max(actual_max_width, img.width)
+                #         actual_total_height += img.height
+
+                #     final_image_pil = Image.new('RGB', (actual_max_width, actual_total_height), (255, 255, 255))
+                #     current_y_offset = 0
+                #     for pil_img_to_paste in pil_page_images:
+                #         final_image_pil.paste(pil_img_to_paste, (0, current_y_offset))
+                #         current_y_offset += pil_img_to_paste.height
+                    
+                #     save_params_pil = {}
+                #     if page_raster_format == 'jpeg': save_params_pil.update({'quality': jpeg_quality, 'optimize': True})
+                #     final_image_pil.save(output_file_path, **save_params_pil)
+                # except Exception as e_stitch_pil:
+                #     error_msg = f"Error stitching/saving final image (possibly out of memory): {str(e_stitch_pil)[:100]}..."
+                #     update_task_in_db(task_id, status='failed', message=error_msg)
+                #     return
+                # finally:
+                #     if final_image_pil: final_image_pil.close()
+                #     for img_obj in pil_page_images: img_obj.close()
+
+                if not shutil.which('convert'): # 'convert' is the main ImageMagick command
+                    error_msg = "Server configuration error: ImageMagick 'convert' command not found, which is required for stitching large images."
+                    update_task_in_db(task_id, status='failed', message=error_msg)
+                    return
+                
                 if not temp_image_files_for_stitching_or_ocr:
                     update_task_in_db(task_id, status='failed', message="Error: No page images were created.")
                     return
 
-                update_task_in_db(task_id, progress=95, message="Finalising: Stitching images...", update_heartbeat=True)
-                pil_page_images, final_image_pil = [], None
-                try:
-                    actual_max_width, actual_total_height = 0, 0
-                    for i, temp_file_path in enumerate(temp_image_files_for_stitching_or_ocr):
-                        if check_cancellation(task_id):
-                            app.logger.info(f"Task {task_id} cancelled by user during image stitching.")
-                            cleanup_and_delete_task_record(task_id)
-                            return
-                        img = Image.open(temp_file_path)
-                        pil_page_images.append(img)
-                        actual_max_width = max(actual_max_width, img.width)
-                        actual_total_height += img.height
+                update_task_in_db(task_id, progress=95, message="Finalising: Stitching pages together...", update_heartbeat=True)
 
-                    final_image_pil = Image.new('RGB', (actual_max_width, actual_total_height), (255, 255, 255))
-                    current_y_offset = 0
-                    for pil_img_to_paste in pil_page_images:
-                        final_image_pil.paste(pil_img_to_paste, (0, current_y_offset))
-                        current_y_offset += pil_img_to_paste.height
-                    
-                    save_params_pil = {}
-                    if page_raster_format == 'jpeg': save_params_pil.update({'quality': jpeg_quality, 'optimize': True})
-                    final_image_pil.save(output_file_path, **save_params_pil)
-                except Exception as e_stitch_pil:
-                    error_msg = f"Error stitching/saving final image (possibly out of memory): {str(e_stitch_pil)[:100]}..."
+                # The "-append" command tells ImageMagick to stack images vertically
+                # It will read each image from disk, append to the output, and discard. Very memory-efficient.
+                stitch_command = [
+                    'convert',
+                    *temp_image_files_for_stitching_or_ocr, # Unpacks the list of file paths
+                    '-append',
+                    output_file_path
+                ]
+                
+                app.logger.info(f"Task {task_id}: Running ImageMagick stitch command.")
+                try:
+                    # Add a generous timeout
+                    result = subprocess.run(stitch_command, check=True, capture_output=True, text=True, encoding='utf-8', timeout=600)
+                    app.logger.info(f"Task {task_id}: ImageMagick completed. STDOUT: {result.stdout}")
+                except subprocess.CalledProcessError as e:
+                    error_msg = "ImageMagick stitching failed. See server logs for details."
+                    app.logger.error(f"Task {task_id} ImageMagick failed. Command: '{' '.join(e.cmd)}'. STDERR: {e.stderr}")
                     update_task_in_db(task_id, status='failed', message=error_msg)
                     return
-                finally:
-                    if final_image_pil: final_image_pil.close()
-                    for img_obj in pil_page_images: img_obj.close()
+                except subprocess.TimeoutExpired:
+                    error_msg = "Image stitching timed out. The document may be too large or complex."
+                    update_task_in_db(task_id, status='failed', message=error_msg)
+                    return
             
             try:
                 if os.path.exists(output_file_path): processed_size = os.path.getsize(output_file_path)
