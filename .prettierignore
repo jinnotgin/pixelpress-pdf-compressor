@@ -1,0 +1,7 @@
+dist
+dist-single
+coverage
+node_modules
+archived
+reference
+src/features/compression/workers/pixelpress.py

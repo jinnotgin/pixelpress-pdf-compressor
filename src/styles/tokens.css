@@ -1,0 +1,61 @@
+:root {
+  --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --canvas: oklch(0.975 0.006 275);
+  --surface: oklch(0.995 0.003 275);
+  --surface-muted: oklch(0.956 0.008 275);
+  --surface-accent: oklch(0.94 0.035 276);
+  --ink: oklch(0.235 0.025 275);
+  --ink-soft: oklch(0.48 0.02 275);
+  --ink-faint: oklch(0.64 0.016 275);
+  --border: oklch(0.88 0.012 275);
+  --border-strong: oklch(0.76 0.022 275);
+  --accent: oklch(0.53 0.21 277);
+  --accent-hover: oklch(0.46 0.205 277);
+  --accent-ink: oklch(0.985 0.006 275);
+  --success: oklch(0.56 0.145 155);
+  --success-bg: oklch(0.95 0.035 155);
+  --warning: oklch(0.59 0.145 69);
+  --warning-bg: oklch(0.96 0.035 78);
+  --danger: oklch(0.57 0.2 27);
+  --danger-bg: oklch(0.955 0.035 25);
+  --focus: oklch(0.66 0.16 277 / 0.34);
+  --radius-sm: 7px;
+  --radius: 10px;
+  --radius-lg: 16px;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+* {
+  box-sizing: border-box;
+}
+html {
+  font-family: var(--font);
+  background: var(--canvas);
+  color: var(--ink);
+}
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100svh;
+}
+button,
+input,
+select {
+  font: inherit;
+}
+button {
+  color: inherit;
+}
+button,
+label,
+input {
+  -webkit-tap-highlight-color: transparent;
+}
+svg {
+  display: block;
+}
+
+:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}

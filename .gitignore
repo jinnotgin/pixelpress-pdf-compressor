@@ -166,3 +166,50 @@ tasks.db
 .DS_Store
 .python-version
 gunicorn.log
+
+# ---------------------------------------------------------------------------
+# Node / Vite / frontend tooling
+# ---------------------------------------------------------------------------
+node_modules/
+.pnp
+.pnp.js
+
+# Build output
+dist/
+dist-single/
+dist-ssr/
+build/
+*.local
+
+# Vite / bundler caches
+.vite/
+node_modules/.vite/
+.rollup.cache/
+.turbo/
+
+# Test / coverage
+coverage/
+.vitest/
+*.lcov
+
+# TypeScript incremental build info
+*.tsbuildinfo
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Editor / OS
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+Thumbs.db
+.claude/launch.json
