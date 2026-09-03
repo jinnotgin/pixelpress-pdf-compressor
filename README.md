@@ -1,16 +1,16 @@
 # PixelPress
 
-Browser-only PDF compressor. Every byte is processed **on the user's device** —
-Pyodide + PyMuPDF do the PDF work and Tesseract handles optional English OCR, all
-inside a Web Worker. Nothing is uploaded.
+A PDF compressor for Figma PDF exports, which often end up being huge. PixelPress
+makes them small enough to share.
 
-This is the `pixelpress-browser.html` prototype unpacked into a Vite + React +
-TypeScript app, organised with a
+Everything runs in the browser: Pyodide + PyMuPDF do the PDF work and Tesseract
+handles optional English OCR, all inside a Web Worker. Nothing is uploaded to any
+cloud services.
+
+A Vite + React + TypeScript app, organised with a
 [bulletproof-react](https://github.com/alan2207/bulletproof-react) style
-architecture. The original single file is kept at
-[`reference/pixelpress-browser.html`](reference/pixelpress-browser.html) as a
-snapshot, and the `npm run build:single` command reproduces an equivalent
-one-file distribution.
+architecture. `npm run build:single` produces an equivalent single-file
+distribution.
 
 ## Commands
 
@@ -27,7 +27,7 @@ one-file distribution.
 
 > The Pyodide and Tesseract runtimes are always fetched from a pinned CDN URL on
 > first use (they are far too large to bundle) and then cached by the browser.
-> `build:single` inlines only first-party code, exactly like the original page.
+> `build:single` inlines only first-party code.
 
 ## Architecture
 
@@ -50,10 +50,10 @@ src/
 ├── styles/                   Global stylesheet (design tokens + layout)
 └── features/
     └── compression/         The one feature: the compressor
-        ├── index.ts         Public surface — the only file others import from
+        ├── index.ts         Public surface; the only file others import from
         ├── config.ts        Feature constants (limits, CDN URLs, storage keys)
         ├── types.ts         Domain types + the worker message protocol
-        ├── components/       SettingsPanel, DropZone, JobRow, RangeControl, …
+        ├── components/       SettingsPanel, DropZone, JobRow, RangeControl, ...
         ├── hooks/            usePersistentSettings, useStorageEstimate,
         │                     useCompressionQueue (worker + queue orchestration)
         ├── services/         Worker client, OPFS read + history restore
@@ -63,17 +63,16 @@ src/
 
 ### The worker
 
-`workers/pixelpress.worker.ts` is a near line-for-line port of the worker that
-was inlined in the prototype. The Python pipeline lives in
-`workers/pixelpress.py` and is pulled in as a raw string
+`workers/pixelpress.worker.ts` runs the whole pipeline off the main thread. The
+Python lives in `workers/pixelpress.py` and is pulled in as a raw string
 (`import PYTHON_SOURCE from './pixelpress.py?raw'`), so it stays readable and
 lints as real Python.
 
 ### State ownership
 
-- `usePersistentSettings` — settings form state, mirrored to `localStorage` and
+- `usePersistentSettings`: settings form state, mirrored to `localStorage` and
   re-validated on load.
-- `useCompressionQueue` — the worker lifecycle, the job queue, OPFS history
+- `useCompressionQueue`: the worker lifecycle, the job queue, OPFS history
   restore, storage accounting, and the object URLs handed to the download button.
 - Components own only view state (settings drawer open, drag-hover).
 
