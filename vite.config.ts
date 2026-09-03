@@ -11,6 +11,9 @@ import { defineConfig, type UserConfig } from 'vitest/config';
  * part of this bundle. See `src/features/compression/config.ts`.
  */
 export const baseConfig: UserConfig = {
+  // `/` for local dev and the single-file build; set to `/<repo>/` by the
+  // GitHub Pages workflow so asset URLs resolve under the project subpath.
+  base: process.env.BASE_PATH || '/',
   plugins: [react()],
   resolve: {
     alias: {

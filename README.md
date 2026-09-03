@@ -9,8 +9,7 @@ cloud services.
 
 A Vite + React + TypeScript app, organised with a
 [bulletproof-react](https://github.com/alan2207/bulletproof-react) style
-architecture. `npm run build:single` produces an equivalent single-file
-distribution.
+architecture.
 
 ## Commands
 
@@ -25,9 +24,15 @@ distribution.
 | `npm run test` | Vitest unit tests. |
 | `npm run format` | Prettier. |
 
-> The Pyodide and Tesseract runtimes are always fetched from a pinned CDN URL on
-> first use (they are far too large to bundle) and then cached by the browser.
-> `build:single` inlines only first-party code.
+The Pyodide and Tesseract runtimes are fetched from a pinned CDN URL on first use
+(too large to bundle) and then cached by the browser.
+
+## Deployment
+
+Pushing to `main` builds the app and publishes `dist/` to GitHub Pages via
+[`.github/workflows/deploy-pages.yml`](.github/workflows/deploy-pages.yml). Enable
+it once in the repo settings: **Pages > Build and deployment > Source: GitHub
+Actions**.
 
 ## Architecture
 
