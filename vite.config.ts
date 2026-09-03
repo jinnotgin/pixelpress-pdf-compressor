@@ -1,7 +1,7 @@
 import { fileURLToPath, URL } from 'node:url';
 
 import react from '@vitejs/plugin-react';
-import { defineConfig, type UserConfig } from 'vitest/config';
+import { defineConfig, type ViteUserConfig } from 'vitest/config';
 
 /**
  * Base build. Emits a normal multi-asset bundle into `dist/`.
@@ -10,7 +10,7 @@ import { defineConfig, type UserConfig } from 'vitest/config';
  * at runtime from a CDN inside the Web Worker, so they are intentionally NOT
  * part of this bundle. See `src/features/compression/config.ts`.
  */
-export const baseConfig: UserConfig = {
+export const baseConfig: ViteUserConfig = {
   // `/` for local dev and the single-file build; set to `/<repo>/` by the
   // GitHub Pages workflow so asset URLs resolve under the project subpath.
   base: process.env.BASE_PATH || '/',

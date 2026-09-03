@@ -1,7 +1,7 @@
-import { defineConfig, mergeConfig, type UserConfig } from 'vitest/config';
+import { defineConfig, mergeConfig, type ViteUserConfig } from 'vitest/config';
 import { viteSingleFile } from 'vite-plugin-singlefile';
 
-import { baseConfig } from './vite.config';
+import { baseConfig } from './vite.config.ts';
 
 /**
  * Single-file build: `npm run build:single`.
@@ -14,7 +14,7 @@ import { baseConfig } from './vite.config';
  * use, exactly like the original single-file page — they are far too large to
  * inline and are cached aggressively by the browser after the first run.
  */
-const singleFileConfig: UserConfig = {
+const singleFileConfig: ViteUserConfig = {
   plugins: [viteSingleFile()],
   build: {
     outDir: 'dist-single',
