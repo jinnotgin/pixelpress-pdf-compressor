@@ -1,0 +1,1562 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="light" />
+  <meta name="description" content="Compress PDFs privately in your browser with PixelPress." />
+  <title>PixelPress Browser Lab</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@19.2.6",
+        "react/": "https://esm.sh/react@19.2.6/",
+        "react-dom": "https://esm.sh/react-dom@19.2.6",
+        "react-dom/": "https://esm.sh/react-dom@19.2.6/"
+      }
+    }
+  </script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.6/babel.min.js"></script>
+  <script>
+    Babel.registerPreset("react-automatic", {
+      presets: [[Babel.availablePresets.react, { runtime: "automatic" }]],
+    });
+  </script>
+  <style>
+    :root {
+      --font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --canvas: oklch(0.975 0.006 275);
+      --surface: oklch(0.995 0.003 275);
+      --surface-muted: oklch(0.956 0.008 275);
+      --surface-accent: oklch(0.94 0.035 276);
+      --ink: oklch(0.235 0.025 275);
+      --ink-soft: oklch(0.48 0.02 275);
+      --ink-faint: oklch(0.64 0.016 275);
+      --border: oklch(0.88 0.012 275);
+      --border-strong: oklch(0.76 0.022 275);
+      --accent: oklch(0.53 0.21 277);
+      --accent-hover: oklch(0.46 0.205 277);
+      --accent-ink: oklch(0.985 0.006 275);
+      --success: oklch(0.56 0.145 155);
+      --success-bg: oklch(0.95 0.035 155);
+      --warning: oklch(0.59 0.145 69);
+      --warning-bg: oklch(0.96 0.035 78);
+      --danger: oklch(0.57 0.2 27);
+      --danger-bg: oklch(0.955 0.035 25);
+      --focus: oklch(0.66 0.16 277 / 0.34);
+      --radius-sm: 7px;
+      --radius: 10px;
+      --radius-lg: 16px;
+      --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    * { box-sizing: border-box; }
+    html { font-family: var(--font); background: var(--canvas); color: var(--ink); }
+    body { margin: 0; min-width: 320px; min-height: 100svh; }
+    button, input, select { font: inherit; }
+    button { color: inherit; }
+    button, label, input { -webkit-tap-highlight-color: transparent; }
+    svg { display: block; }
+
+    :focus-visible {
+      outline: 3px solid var(--focus);
+      outline-offset: 2px;
+    }
+
+    .app-shell {
+      min-height: 100svh;
+      display: grid;
+      grid-template-columns: 336px minmax(0, 1fr);
+    }
+
+    .settings-panel {
+      position: sticky;
+      top: 0;
+      height: 100svh;
+      display: flex;
+      flex-direction: column;
+      border-right: 1px solid var(--border);
+      background: var(--surface);
+      overflow: hidden;
+    }
+
+    .brand-row {
+      min-height: 78px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 20px 24px 17px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .brand-mark {
+      width: 36px;
+      height: 36px;
+      display: grid;
+      place-items: center;
+      border-radius: 9px;
+      color: var(--accent-ink);
+      background: var(--accent);
+      flex: 0 0 auto;
+    }
+
+    .brand-copy { min-width: 0; }
+    .brand-name { margin: 0; font-size: 1.08rem; line-height: 1.2; letter-spacing: -0.02em; }
+    .brand-mode { margin: 3px 0 0; color: var(--ink-soft); font-size: 0.76rem; font-weight: 500; }
+
+    .settings-toggle {
+      display: none;
+      margin-left: auto;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      border-radius: var(--radius-sm);
+      padding: 8px 10px;
+      cursor: pointer;
+    }
+
+    .settings-scroll { padding: 22px 24px 36px; overflow-y: auto; flex: 1; }
+    .privacy-note {
+      display: grid;
+      grid-template-columns: 24px minmax(0, 1fr);
+      gap: 11px;
+      padding: 13px;
+      margin-bottom: 26px;
+      border: 1px solid oklch(0.86 0.035 155);
+      border-radius: var(--radius);
+      background: var(--success-bg);
+      color: oklch(0.38 0.09 155);
+    }
+    .privacy-note strong { display: block; font-size: 0.82rem; }
+    .privacy-note p { margin: 3px 0 0; font-size: 0.75rem; line-height: 1.45; }
+
+    .settings-form { display: grid; gap: 28px; }
+    .form-section { border: 0; margin: 0; padding: 0; min-width: 0; }
+    .section-label { display: block; margin: 0 0 11px; font-size: 0.82rem; font-weight: 700; }
+    .sub-label { display: flex; justify-content: space-between; gap: 12px; color: var(--ink-soft); font-size: 0.76rem; font-weight: 600; }
+    .sub-label output { color: var(--ink); font-variant-numeric: tabular-nums; }
+    .control-stack { display: grid; gap: 17px; }
+
+    .segmented {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      padding: 3px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface-muted);
+    }
+    .segmented.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .segmented input { position: absolute; opacity: 0; pointer-events: none; }
+    .segmented label {
+      padding: 8px 7px;
+      border-radius: var(--radius-sm);
+      color: var(--ink-soft);
+      text-align: center;
+      font-size: 0.76rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: color 180ms var(--ease-out), background-color 180ms var(--ease-out);
+    }
+    .segmented input:checked + label { color: var(--accent); background: var(--surface); }
+    .segmented input:focus-visible + label { outline: 3px solid var(--focus); outline-offset: 1px; }
+    .strategy-group { margin-top: 9px; }
+    .preset-note { min-height: 34px; margin: 9px 2px 0; color: var(--ink-soft); font-size: 0.72rem; line-height: 1.45; }
+
+    .range-row { display: grid; grid-template-columns: minmax(0, 1fr) 60px; align-items: center; gap: 12px; margin-top: 9px; }
+    input[type="range"] { width: 100%; accent-color: var(--accent); }
+    .number-input {
+      width: 60px;
+      padding: 7px 6px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--surface);
+      color: var(--ink);
+      text-align: center;
+      font-size: 0.78rem;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .check-control {
+      display: grid;
+      grid-template-columns: 18px minmax(0, 1fr);
+      gap: 10px;
+      align-items: start;
+      cursor: pointer;
+    }
+    .check-control input { width: 17px; height: 17px; margin: 1px 0 0; accent-color: var(--accent); }
+    .check-copy strong { display: flex; align-items: center; gap: 7px; font-size: 0.79rem; }
+    .check-copy span { display: block; margin-top: 4px; color: var(--ink-soft); font-size: 0.72rem; line-height: 1.45; }
+    .experimental-tag {
+      padding: 2px 6px;
+      border-radius: 999px;
+      color: oklch(0.42 0.11 69);
+      background: var(--warning-bg);
+      font-size: 0.61rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .disabled-copy { opacity: 0.48; cursor: not-allowed; }
+
+    .secondary-button, .icon-button, .text-button, .primary-button {
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      transition: background-color 180ms var(--ease-out), border-color 180ms var(--ease-out), color 180ms var(--ease-out), transform 180ms var(--ease-out);
+    }
+    .primary-button {
+      min-height: 40px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 9px 14px;
+      border: 1px solid var(--accent);
+      background: var(--accent);
+      color: var(--accent-ink);
+      font-size: 0.78rem;
+      font-weight: 700;
+    }
+    .primary-button:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+    .primary-button:active, .secondary-button:active { transform: translateY(1px); }
+    .primary-button:disabled { opacity: 0.48; cursor: not-allowed; }
+    .secondary-button {
+      min-height: 38px;
+      padding: 8px 12px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--ink-soft);
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+    .secondary-button:hover { border-color: var(--border-strong); background: var(--surface-muted); color: var(--ink); }
+    .secondary-button.full { width: 100%; }
+    .text-button { padding: 5px 7px; border: 0; background: transparent; color: var(--ink-soft); font-size: 0.72rem; font-weight: 600; }
+    .text-button:hover { color: var(--ink); background: var(--surface-muted); }
+    .text-button.danger:hover { color: var(--danger); background: var(--danger-bg); }
+    .icon-button { display: grid; place-items: center; width: 38px; height: 38px; padding: 0; border: 1px solid var(--border); background: var(--surface); color: var(--ink-soft); }
+    .icon-button:hover { color: var(--ink); border-color: var(--border-strong); background: var(--surface-muted); }
+
+    .settings-footer {
+      padding: 14px 24px 16px;
+      border-top: 1px solid var(--border);
+      color: var(--ink-faint);
+      background: var(--surface);
+      font-size: 0.69rem;
+      line-height: 1.5;
+    }
+    .runtime-line { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--warning); flex: 0 0 auto; }
+    .status-dot.ready { background: var(--success); }
+    .status-dot.error { background: var(--danger); }
+    .runtime-label { display: flex; align-items: center; gap: 7px; color: var(--ink-soft); font-weight: 600; }
+    .storage-line { margin-top: 6px; }
+
+    .workspace {
+      min-width: 0;
+      min-height: 100svh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .workspace-header {
+      min-height: 78px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      padding: 18px 30px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+    }
+    .workspace-title h1 { margin: 0; font-size: 1.16rem; letter-spacing: -0.02em; }
+    .workspace-title p { margin: 4px 0 0; color: var(--ink-soft); font-size: 0.75rem; }
+    .header-actions { display: flex; align-items: center; gap: 9px; }
+    .header-summary { color: var(--ink-soft); font-size: 0.72rem; font-variant-numeric: tabular-nums; }
+
+    .workspace-body { flex: 1; min-height: 0; overflow-y: auto; padding: 30px; }
+    .workspace-body.is-empty { display: grid; grid-template-rows: auto minmax(0, 1fr); }
+    /* Rows are pinned: hiding an empty notice stack must not pull the drop zone
+       up into the auto row, which would top-align it instead of centring it. */
+    .workspace-body.is-empty .notice-stack { grid-row: 1; }
+    .workspace-body.is-empty .main-stack { grid-row: 2; display: grid; align-content: safe center; }
+    .notice-stack:empty { display: none; }
+
+    .workspace-footer {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 14px;
+      padding: 14px 30px 18px;
+      color: var(--ink-faint);
+      font-size: 0.69rem;
+    }
+    .workspace-footer a { color: var(--ink-soft); font-weight: 600; text-decoration: none; border-bottom: 1px solid var(--border-strong); }
+    .workspace-footer a:hover { color: var(--accent); border-bottom-color: var(--accent); }
+    .workspace-footer .version { font-variant-numeric: tabular-nums; }
+    .content-width { width: min(960px, 100%); margin: 0 auto; }
+
+    .notice {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 12px 14px;
+      margin-bottom: 18px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--ink-soft);
+      background: var(--surface);
+      font-size: 0.75rem;
+      line-height: 1.45;
+    }
+    .notice.error { color: oklch(0.42 0.14 27); border-color: oklch(0.84 0.06 27); background: var(--danger-bg); }
+    .notice.warning { color: oklch(0.42 0.11 69); border-color: oklch(0.84 0.06 69); background: var(--warning-bg); }
+    .notice strong { color: inherit; }
+
+    .drop-zone {
+      width: 100%;
+      min-height: 390px;
+      display: grid;
+      place-items: center;
+      padding: 38px;
+      border: 1px dashed var(--border-strong);
+      border-radius: var(--radius-lg);
+      background: var(--surface);
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 180ms var(--ease-out), background-color 180ms var(--ease-out), transform 180ms var(--ease-out);
+    }
+    .drop-zone:hover, .drop-zone.dragging { border-color: var(--accent); background: var(--surface-accent); }
+    .drop-zone.dragging { transform: scale(0.997); }
+    .drop-content { max-width: 450px; pointer-events: none; }
+    .drop-icon {
+      width: 58px;
+      height: 58px;
+      display: grid;
+      place-items: center;
+      margin: 0 auto 20px;
+      border: 1px solid oklch(0.84 0.04 277);
+      border-radius: 15px;
+      color: var(--accent);
+      background: var(--surface-accent);
+    }
+    .drop-content h2 { margin: 0; font-size: 1.12rem; letter-spacing: -0.02em; }
+    .drop-content p { max-width: 55ch; margin: 8px auto 0; color: var(--ink-soft); font-size: 0.78rem; line-height: 1.55; }
+    .drop-cta { display: inline-flex; align-items: center; gap: 7px; margin-top: 20px; color: var(--accent); font-size: 0.78rem; font-weight: 700; }
+    .drop-meta { display: block; margin-top: 12px; color: var(--ink-faint); font-size: 0.68rem; }
+
+    .queue-head { display: flex; align-items: end; justify-content: space-between; gap: 20px; margin: 2px 0 14px; }
+    .queue-head h2 { margin: 0; font-size: 0.96rem; }
+    .queue-head p { margin: 4px 0 0; color: var(--ink-soft); font-size: 0.72rem; }
+
+    .compact-drop {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      min-height: 68px;
+      margin-bottom: 18px;
+      border: 1px dashed var(--border-strong);
+      border-radius: var(--radius);
+      background: transparent;
+      color: var(--ink-soft);
+      font-size: 0.75rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .compact-drop:hover, .compact-drop.dragging { color: var(--accent); border-color: var(--accent); background: var(--surface-accent); }
+
+    .queue-list { display: grid; gap: 10px; }
+    .job-row {
+      display: grid;
+      grid-template-columns: 38px minmax(0, 1fr) auto;
+      gap: 13px;
+      align-items: start;
+      padding: 15px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+    .file-glyph { width: 38px; height: 44px; display: grid; place-items: center; border-radius: 7px; color: var(--accent); background: var(--surface-accent); font-size: 0.62rem; font-weight: 800; letter-spacing: 0.03em; }
+    .job-main { min-width: 0; }
+    .job-title-line { display: flex; align-items: center; gap: 8px; min-width: 0; }
+    .job-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.79rem; font-weight: 650; }
+    .status-chip { flex: 0 0 auto; padding: 3px 7px; border-radius: 999px; background: var(--surface-muted); color: var(--ink-soft); font-size: 0.61rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.035em; }
+    .status-chip.processing { color: var(--accent); background: var(--surface-accent); }
+    .status-chip.done { color: oklch(0.39 0.105 155); background: var(--success-bg); }
+    .status-chip.error { color: var(--danger); background: var(--danger-bg); }
+    .status-chip.cancelled { color: var(--ink-soft); }
+    .job-detail { margin: 8px 0 0; color: var(--ink-soft); font-size: 0.7rem; line-height: 1.45; }
+    .job-detail.error { color: var(--danger); }
+    .job-metadata { display: flex; flex-wrap: wrap; gap: 7px 13px; margin-top: 6px; color: var(--ink-faint); font-size: 0.65rem; }
+    .job-metadata span { display: inline-flex; align-items: center; gap: 4px; }
+    .progress-track { height: 4px; margin-top: 10px; overflow: hidden; border-radius: 999px; background: var(--surface-muted); }
+    .progress-fill { height: 100%; border-radius: inherit; background: var(--accent); transition: transform 220ms var(--ease-out); transform-origin: left; }
+    .job-actions { display: flex; align-items: center; gap: 5px; }
+
+    .size-change { gap: 5px !important; }
+    .size-arrow { color: var(--ink-faint); }
+    .result-size { color: var(--success); font-weight: 700; }
+    .savings.negative { color: var(--warning); }
+    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+
+    @media (max-width: 800px) {
+      .app-shell { display: block; }
+      .settings-panel { position: static; width: 100%; height: auto; border-right: 0; border-bottom: 1px solid var(--border); }
+      .brand-row { min-height: 66px; padding: 14px 18px; }
+      .brand-mark { width: 34px; height: 34px; }
+      .settings-toggle { display: inline-flex; align-items: center; gap: 7px; }
+      .settings-scroll { display: none; padding: 18px; max-height: none; }
+      .settings-panel.open .settings-scroll { display: block; }
+      .settings-footer { display: none; }
+      .workspace { min-height: auto; overflow: visible; }
+      .workspace-header { min-height: 66px; padding: 13px 18px; position: sticky; top: 0; z-index: 4; }
+      .workspace-title p, .header-summary { display: none; }
+      .workspace-body { overflow: visible; padding: 18px; }
+      .workspace-body.is-empty { display: block; }
+      .workspace-footer { padding: 12px 18px 16px; }
+      .drop-zone { min-height: 330px; padding: 28px 20px; }
+    }
+
+    @media (max-width: 520px) {
+      .workspace-header { gap: 10px; }
+      .workspace-title h1 { font-size: 1rem; }
+      .primary-button { padding-inline: 11px; }
+      .primary-button .wide-label { display: none; }
+      .queue-head { align-items: start; }
+      .job-row { grid-template-columns: 34px minmax(0, 1fr); padding: 13px; }
+      .file-glyph { width: 34px; height: 40px; }
+      .job-actions { grid-column: 2; justify-content: flex-start; }
+      .drop-zone { min-height: 300px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; }
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel" data-type="module" data-presets="react-automatic">
+    import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+    import { createRoot } from "react-dom/client";
+
+    const MAX_FILE_BYTES = 250 * 1024 * 1024;
+    const HISTORY_MAX_AGE_DAYS = 30;
+    const HISTORY_MAX_AGE_MS = HISTORY_MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
+    const DEFAULT_SETTINGS = {
+      preset: "high",
+      strategy: "flatten",
+      dpi: 96,
+      jpegQuality: 78,
+      recognizeText: true,
+    };
+
+    const PRESET_COPY = {
+      high: "Flattens page visuals for the lightest file, then rebuilds existing searchable text.",
+      balanced: "Preserves original text and vectors while recompressing embedded images.",
+      custom: "Pick the strategy, resolution, and JPEG quality limits yourself.",
+    };
+
+    const STRATEGY_COPY = {
+      flatten: "Turns each page into a single image, then rebuilds a searchable text layer on top. Smallest files, but vectors and fonts are not kept.",
+      optimize: "Keeps the original text and vector artwork, recompressing only the images embedded in the page.",
+    };
+
+    function resolveSettings(settings) {
+      if (settings.preset === "high") return { preset: "high", strategy: "flatten", dpi: 96, jpegQuality: 78, recognizeText: settings.recognizeText };
+      if (settings.preset === "custom") return { preset: "custom", strategy: settings.strategy, dpi: settings.dpi, jpegQuality: settings.jpegQuality, recognizeText: settings.recognizeText };
+      return { preset: "balanced", strategy: "optimize", dpi: 96, jpegQuality: 78, recognizeText: settings.recognizeText };
+    }
+
+    function PixelPressWorker() {
+      "use strict";
+
+      const PYODIDE_INDEX_URL = "https://cdn.jsdelivr.net/pyodide/v314.0.6/full/";
+      const TESSERACT_URL = "https://cdn.jsdelivr.net/npm/tesseract.js@7.0.0/dist/tesseract.esm.min.js";
+      const CHUNK_SIZE = 4 * 1024 * 1024;
+      let pyodide = null;
+      let ocrWorker = null;
+      let createOCRWorker = null;
+      let ocrContext = null;
+      let activeJobId = null;
+
+      const PYTHON_SOURCE = String.raw`
+import json
+import math
+import os
+import pymupdf
+
+_PP_JOBS = {}
+_PP_TILE_PX = 3072
+_PP_MAX_OCR_PIXELS = 24_000_000
+
+def pp_open(job_id, input_path, settings_json):
+    settings = json.loads(settings_json)
+    source = pymupdf.open(input_path)
+    output = pymupdf.open()
+    _PP_JOBS[job_id] = {"source": source, "output": output, "settings": settings}
+    return json.dumps({"pages": len(source)})
+
+def _pp_encoded_pixmap(page, dpi, quality, max_pixels=None):
+    zoom = float(dpi) / 72.0
+    width = max(1, math.ceil(page.rect.width * zoom))
+    height = max(1, math.ceil(page.rect.height * zoom))
+    if max_pixels and width * height > max_pixels:
+        factor = math.sqrt(max_pixels / float(width * height))
+        zoom *= factor
+        width = max(1, math.ceil(page.rect.width * zoom))
+        height = max(1, math.ceil(page.rect.height * zoom))
+    matrix = pymupdf.Matrix(zoom, zoom)
+    pix = page.get_pixmap(matrix=matrix, alpha=False)
+    data = pix.tobytes(output="jpeg", jpg_quality=int(quality))
+    return data, width, height, zoom * 72.0
+
+def pp_analyze_page(job_id, page_index):
+    job = _PP_JOBS[job_id]
+    page = job["source"].load_page(int(page_index))
+    text = page.get_text("text", sort=True) or ""
+    meaningful = sum(1 for character in text if character.isalnum())
+    replacement = text.count("\ufffd")
+    words = [item[4] for item in page.get_text("words") if len(item) > 4 and any(character.isalnum() for character in item[4])]
+    try:
+        has_hidden_text = any(int(span.get("type", 0)) > 1 for span in page.get_texttrace())
+    except Exception:
+        has_hidden_text = False
+
+    page_area = max(page.rect.get_area(), 1)
+    image_coverage = 0.0
+    try:
+        for info in page.get_image_info(xrefs=False):
+            image_rect = pymupdf.Rect(info.get("bbox", (0, 0, 0, 0))) & page.rect
+            image_coverage = max(image_coverage, image_rect.get_area() / page_area)
+    except Exception:
+        pass
+
+    invalid_ratio = replacement / max(meaningful, 1)
+    usable = meaningful >= 3 and invalid_ratio <= 0.12
+    if usable and image_coverage >= 0.55 and not has_hidden_text and (meaningful < 40 or len(words) < 6):
+        usable = False
+
+    return json.dumps({
+        "usable": usable,
+        "characters": meaningful,
+        "words": len(words),
+        "hidden": has_hidden_text,
+        "imageCoverage": round(image_coverage, 3),
+    })
+
+def pp_copy_original_page(job_id, page_index, final_copy):
+    job = _PP_JOBS[job_id]
+    index = int(page_index)
+    job["output"].insert_pdf(
+        job["source"],
+        from_page=index,
+        to_page=index,
+        links=False,
+        annots=True,
+        final=1 if final_copy else 0,
+    )
+    return True
+
+def _pp_restore_text_layer(source_page, target_page):
+    restored = 0
+    for word in source_page.get_text("words", sort=False):
+        if len(word) < 5:
+            continue
+        text = str(word[4]).replace("\x00", "").strip()
+        if not text:
+            continue
+        rect = pymupdf.Rect(word[:4])
+        if rect.is_empty or rect.height <= 0:
+            continue
+        fontsize = max(1.0, rect.height * 0.72)
+        baseline = pymupdf.Point(rect.x0, rect.y1 - max(0.5, rect.height * 0.18))
+        try:
+            target_page.insert_text(
+                baseline,
+                text,
+                fontsize=fontsize,
+                fontname="helv",
+                render_mode=3,
+                overlay=True,
+            )
+            restored += 1
+        except Exception:
+            safe_text = text.encode("latin-1", "replace").decode("latin-1")
+            target_page.insert_text(
+                baseline,
+                safe_text,
+                fontsize=fontsize,
+                fontname="helv",
+                render_mode=3,
+                overlay=True,
+            )
+            restored += 1
+    return restored
+
+def pp_begin_flatten_page(job_id, page_index):
+    job = _PP_JOBS[job_id]
+    page = job["source"].load_page(int(page_index))
+    settings = job["settings"]
+    zoom = int(settings["dpi"]) / 72.0
+    tiles_x = max(1, math.ceil(page.rect.width * zoom / _PP_TILE_PX))
+    tiles_y = max(1, math.ceil(page.rect.height * zoom / _PP_TILE_PX))
+    job["flatten"] = {
+        "page": page,
+        "target": job["output"].new_page(width=page.rect.width, height=page.rect.height),
+        "zoom": zoom,
+        "quality": int(settings["jpegQuality"]),
+        "tiles_x": tiles_x,
+        "tiles_y": tiles_y,
+    }
+    return json.dumps({"tiles": tiles_x * tiles_y})
+
+def pp_flatten_tile(job_id, tile_index):
+    state = _PP_JOBS[job_id]["flatten"]
+    zoom = state["zoom"]
+    page = state["page"]
+    index = int(tile_index)
+    tile_x = index % state["tiles_x"]
+    tile_y = index // state["tiles_x"]
+    clip = pymupdf.Rect(
+        tile_x * _PP_TILE_PX / zoom,
+        tile_y * _PP_TILE_PX / zoom,
+        min((tile_x + 1) * _PP_TILE_PX / zoom, page.rect.width),
+        min((tile_y + 1) * _PP_TILE_PX / zoom, page.rect.height),
+    )
+    if clip.is_empty:
+        return False
+    pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), clip=clip, alpha=False)
+    state["target"].insert_image(clip, stream=pix.tobytes(output="jpeg", jpg_quality=state["quality"]))
+    return True
+
+def pp_finish_flatten_page(job_id, restore_text):
+    state = _PP_JOBS[job_id].pop("flatten")
+    if restore_text:
+        _pp_restore_text_layer(state["page"], state["target"])
+    return True
+
+def pp_render_ocr_page(job_id, page_index, target_path):
+    job = _PP_JOBS[job_id]
+    page = job["source"].load_page(int(page_index))
+    settings = job["settings"]
+    data, width, height, effective_dpi = _pp_encoded_pixmap(
+        page,
+        int(settings["dpi"]),
+        int(settings["jpegQuality"]),
+        _PP_MAX_OCR_PIXELS,
+    )
+    with open(target_path, "wb") as output:
+        output.write(data)
+    return json.dumps({"width": width, "height": height, "effectiveDpi": round(effective_dpi)})
+
+def pp_append_ocr_pdf(job_id, pdf_path):
+    job = _PP_JOBS[job_id]
+    with pymupdf.open(pdf_path) as page_pdf:
+        job["output"].insert_pdf(page_pdf)
+    return True
+
+def pp_finalize(job_id, output_path):
+    job = _PP_JOBS[job_id]
+    output = job["output"]
+    source = job["source"]
+    settings = job["settings"]
+    warning = None
+    try:
+        metadata = source.metadata
+        if metadata:
+            output.set_metadata(metadata)
+        toc = source.get_toc()
+        if toc:
+            output.set_toc(toc)
+    except Exception:
+        pass
+    try:
+        dpi = int(settings["dpi"])
+        if settings.get("strategy") != "flatten":
+            output.rewrite_images(
+                dpi_threshold=max(dpi + 1, round(dpi * 1.15)),
+                dpi_target=dpi,
+                quality=int(settings["jpegQuality"]),
+                lossy=True,
+                lossless=True,
+                bitonal=True,
+            )
+    except Exception as error:
+        warning = f"Image rewriting was skipped: {error}"
+    output.save(output_path, garbage=4, deflate=True, deflate_images=True, clean=True)
+    with pymupdf.open(output_path) as verification:
+        if len(verification) != len(source):
+            raise RuntimeError("The output page count did not match the source PDF.")
+    return json.dumps({"size": os.path.getsize(output_path), "warning": warning})
+
+def pp_close(job_id):
+    job = _PP_JOBS.pop(job_id, None)
+    if not job:
+        return
+    if job.get("output") is not None:
+        job["output"].close()
+    job["source"].close()
+`;
+
+      function send(type, payload) {
+        const message = { type: type };
+        const details = payload || {};
+        Object.keys(details).forEach(function (key) {
+          message[key] = details[key];
+        });
+        self.postMessage(message);
+      }
+
+      function round1(value) {
+        return Math.round(value * 10) / 10;
+      }
+
+      function safeMessage(error) {
+        return error && error.message ? error.message : String(error);
+      }
+
+      async function boot() {
+        try {
+          send("runtime", { status: "loading", message: "Loading Python runtime" });
+          pyodide = await loadPyodide({ indexURL: PYODIDE_INDEX_URL });
+          send("runtime", { status: "loading", message: "Loading PDF engine" });
+          await pyodide.loadPackage(["pymupdf"]);
+          await pyodide.runPythonAsync(PYTHON_SOURCE);
+          const opfs = Boolean(self.isSecureContext && navigator.storage && navigator.storage.getDirectory);
+          send("runtime", { status: "ready", message: opfs ? "Ready" : "Ready (M)", opfs });
+        } catch (error) {
+          send("runtime", { status: "error", message: safeMessage(error) });
+        }
+      }
+
+      function callPython(name) {
+        const args = Array.prototype.slice.call(arguments, 1);
+        const callable = pyodide.globals.get(name);
+        try {
+          return callable.apply(null, args);
+        } finally {
+          callable.destroy();
+        }
+      }
+
+      async function directoryForPath(path, create) {
+        const root = await navigator.storage.getDirectory();
+        const parts = path.split("/").filter(Boolean);
+        const filename = parts.pop();
+        let directory = root;
+        for (const part of parts) {
+          directory = await directory.getDirectoryHandle(part, { create });
+        }
+        return { directory, filename };
+      }
+
+      async function writeBytesToOPFS(path, bytes) {
+        const { directory, filename } = await directoryForPath(path, true);
+        const fileHandle = await directory.getFileHandle(filename, { create: true });
+        const access = await fileHandle.createSyncAccessHandle();
+        try {
+          await access.truncate(0);
+          let offset = 0;
+          while (offset < bytes.byteLength) {
+            const end = Math.min(offset + CHUNK_SIZE, bytes.byteLength);
+            const chunk = bytes.subarray(offset, end);
+            await access.write(chunk, { at: offset });
+            offset = end;
+          }
+          await access.flush();
+        } finally {
+          await access.close();
+        }
+      }
+
+      async function stageInput(jobId, file) {
+        const path = `pixelpress/jobs/${jobId}/input.pdf`;
+        const { directory, filename } = await directoryForPath(path, true);
+        const fileHandle = await directory.getFileHandle(filename, { create: true });
+        const access = await fileHandle.createSyncAccessHandle();
+        try {
+          await access.truncate(0);
+          let offset = 0;
+          while (offset < file.size) {
+            const end = Math.min(offset + CHUNK_SIZE, file.size);
+            const chunk = new Uint8Array(await file.slice(offset, end).arrayBuffer());
+            await access.write(chunk, { at: offset });
+            offset = end;
+            send("progress", {
+              id: jobId,
+              progress: Math.max(1, Math.round((offset / Math.max(file.size, 1)) * 8)),
+              message: "Staging file in private browser storage",
+            });
+          }
+          await access.flush();
+        } finally {
+          await access.close();
+        }
+        return fileHandle.getFile();
+      }
+
+      async function persistMemFile(jobId, memPath, outputName, metadata) {
+        const extension = outputName.split(".").pop();
+        const opfsPath = `pixelpress/jobs/${jobId}/output.${extension}`;
+        const { directory, filename } = await directoryForPath(opfsPath, true);
+        const fileHandle = await directory.getFileHandle(filename, { create: true });
+        const access = await fileHandle.createSyncAccessHandle();
+        const stream = pyodide.FS.open(memPath, "r");
+        const size = pyodide.FS.stat(memPath).size;
+        const buffer = new Uint8Array(Math.min(CHUNK_SIZE, Math.max(size, 1)));
+        try {
+          await access.truncate(0);
+          let offset = 0;
+          while (offset < size) {
+            const length = Math.min(buffer.byteLength, size - offset);
+            const read = pyodide.FS.read(stream, buffer, 0, length, offset);
+            await access.write(buffer.subarray(0, read), { at: offset });
+            offset += read;
+            send("progress", { id: jobId, progress: 97 + Math.round((offset / Math.max(size, 1)) * 2), message: "Saving result locally" });
+          }
+          await access.flush();
+        } finally {
+          pyodide.FS.close(stream);
+          await access.close();
+        }
+        await writeBytesToOPFS(
+          `pixelpress/jobs/${jobId}/metadata.json`,
+          new TextEncoder().encode(JSON.stringify(Object.assign({}, metadata, {
+            outputName: outputName,
+            opfsPath: opfsPath,
+            size: size,
+            completedAt: Date.now()
+          })))
+        );
+        return { size, opfsPath };
+      }
+
+      function mountInput(jobId, file) {
+        const mountPath = `/pixelpress-input-${jobId}`;
+        pyodide.FS.mkdirTree(mountPath);
+        pyodide.FS.mount(pyodide.FS.filesystems.WORKERFS, { files: [file] }, mountPath);
+        return { mountPath, inputPath: `${mountPath}/${file.name}` };
+      }
+
+      function unmountInput(mountPath) {
+        try { pyodide.FS.unmount(mountPath); } catch (error) {}
+        try { pyodide.FS.rmdir(mountPath); } catch (error) {}
+      }
+
+      async function getOCRWorker(jobId, pages) {
+        if (ocrWorker) return ocrWorker;
+        send("progress", { id: jobId, progress: 12, message: "Loading the English text recognition model for the first time" });
+        if (!createOCRWorker) {
+          const tesseractModule = await import(TESSERACT_URL);
+          const tesseractAPI = tesseractModule.default || tesseractModule;
+          createOCRWorker = tesseractAPI.createWorker || tesseractModule.createWorker;
+          if (typeof createOCRWorker !== "function") {
+            throw new Error("The text recognition module loaded without a createWorker API.");
+          }
+        }
+        ocrContext = { jobId, page: 0, pages };
+        ocrWorker = await createOCRWorker("eng", 1, {
+          logger(message) {
+            if (!ocrContext || message.status !== "recognizing text") return;
+            const pageFraction = (ocrContext.page + Number(message.progress || 0)) / Math.max(ocrContext.pages, 1);
+            send("progress", {
+              id: ocrContext.jobId,
+              progress: 16 + Math.round(pageFraction * 76),
+              message: `Reading text on page ${ocrContext.page + 1} of ${ocrContext.pages}`,
+            });
+          },
+        });
+        return ocrWorker;
+      }
+
+      async function terminateOCR() {
+        if (ocrWorker) {
+          try { await ocrWorker.terminate(); } catch (error) {}
+          ocrWorker = null;
+          ocrContext = null;
+        }
+      }
+
+      async function processJob({ id, file, settings }) {
+        activeJobId = id;
+        const opfsAvailable = Boolean(self.isSecureContext && navigator.storage && navigator.storage.getDirectory);
+        let mounted = null;
+        let outputPath = "";
+        let staged = false;
+        try {
+          send("progress", { id, progress: 1, message: "Preparing local workspace" });
+          let readableFile = file;
+          if (opfsAvailable) {
+            try {
+              readableFile = await stageInput(id, file);
+              staged = true;
+            } catch (error) {
+              send("warning", { id, message: `Private storage was unavailable, continuing in memory: ${safeMessage(error)}` });
+              readableFile = file;
+            }
+          }
+
+          mounted = mountInput(id, readableFile);
+          const opened = JSON.parse(callPython("pp_open", id, mounted.inputPath, JSON.stringify(settings)));
+          const pages = opened.pages;
+          if (!pages) throw new Error("This PDF has no pages.");
+
+          outputPath = `/tmp/pixelpress-${id}.pdf`;
+          const baseName = file.name.replace(/\.pdf$/i, "") || "document";
+          const outputName = `${baseName}-pixelpress.pdf`;
+          const textSummary = { nativePages: 0, rebuiltPages: 0, ocrPages: 0, imageOnlyPages: 0 };
+          const analyses = [];
+          let lastOriginalPage = -1;
+          for (let page = 0; page < pages; page += 1) {
+            send("progress", {
+              id,
+              progress: 10 + Math.round(((page + 1) / pages) * 12),
+              message: `Checking searchable text on page ${page + 1} of ${pages}`,
+            });
+            const analysis = JSON.parse(callPython("pp_analyze_page", id, page));
+            analyses.push(analysis);
+            if (settings.strategy !== "flatten" && (analysis.usable || !settings.recognizeText)) lastOriginalPage = page;
+          }
+          for (let page = 0; page < pages; page += 1) {
+            const analysis = analyses[page];
+            if (settings.recognizeText && !analysis.usable) {
+              const recognizer = await getOCRWorker(id, pages);
+              ocrContext = { jobId: id, page, pages };
+              send("progress", { id, progress: 14 + Math.round((page / pages) * 76), message: `No selectable text on page ${page + 1}; reading it in English` });
+              const imagePath = `/tmp/pixelpress-${id}-ocr-page`;
+              const render = JSON.parse(callPython("pp_render_ocr_page", id, page, imagePath));
+              const imageBytes = pyodide.FS.readFile(imagePath);
+              await recognizer.setParameters({ user_defined_dpi: String(render.effectiveDpi) });
+              const result = await recognizer.recognize(imageBytes, { pdfTitle: file.name }, { pdf: true, text: true });
+              if (!result.data.pdf) throw new Error("Text recognition did not produce a searchable PDF page.");
+              const pagePdfPath = `/tmp/pixelpress-${id}-ocr-page.pdf`;
+              pyodide.FS.writeFile(pagePdfPath, new Uint8Array(result.data.pdf));
+              callPython("pp_append_ocr_pdf", id, pagePdfPath);
+              textSummary.ocrPages += 1;
+              try { pyodide.FS.unlink(imagePath); } catch (error) {}
+              try { pyodide.FS.unlink(pagePdfPath); } catch (error) {}
+            } else if (settings.strategy === "flatten") {
+              // A single huge page can be dozens of tiles, so the bar advances per
+              // tile rather than per page — otherwise it sits still for minutes.
+              const pageStart = 22 + (page / pages) * 68;
+              const pageSpan = 68 / pages;
+              const label = `Flattening page ${page + 1} of ${pages}`;
+              send("progress", { id, progress: round1(pageStart), message: label });
+              const flatten = JSON.parse(callPython("pp_begin_flatten_page", id, page));
+              for (let tile = 0; tile < flatten.tiles; tile += 1) {
+                callPython("pp_flatten_tile", id, tile);
+                send("progress", {
+                  id,
+                  progress: round1(pageStart + pageSpan * ((tile + 1) / flatten.tiles)),
+                  message: flatten.tiles > 1 ? `${label} · tile ${tile + 1} of ${flatten.tiles}` : label,
+                });
+              }
+              callPython("pp_finish_flatten_page", id, analysis.usable);
+              if (analysis.usable) textSummary.rebuiltPages += 1;
+              else textSummary.imageOnlyPages += 1;
+            } else {
+              send("progress", { id, progress: round1(22 + ((page + 1) / pages) * 68), message: `Preserving page ${page + 1} of ${pages}` });
+              callPython("pp_copy_original_page", id, page, page === lastOriginalPage);
+              if (analysis.usable) textSummary.nativePages += 1;
+              else textSummary.imageOnlyPages += 1;
+            }
+          }
+          send("progress", { id, progress: 92, message: settings.strategy === "flatten" ? "Optimising flattened PDF" : "Recompressing images while preserving text" });
+          const finalized = JSON.parse(callPython("pp_finalize", id, outputPath));
+          if (finalized.warning) send("warning", { id, message: finalized.warning });
+          await terminateOCR();
+
+          const metadata = { originalName: file.name, originalSize: file.size, settings, textSummary };
+          if (opfsAvailable) {
+            try {
+              const persisted = await persistMemFile(id, outputPath, outputName, metadata);
+              send("done", { id, outputName, outputSize: persisted.size, opfsPath: persisted.opfsPath, pages, textSummary });
+            } catch (error) {
+              const bytes = pyodide.FS.readFile(outputPath);
+              const transferable = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+              send("warning", { id, message: `Could not retain the result in OPFS: ${safeMessage(error)}` });
+              self.postMessage({ type: "done", id, outputName, outputSize: bytes.byteLength, outputBuffer: transferable, pages, textSummary }, [transferable]);
+            }
+          } else {
+            const bytes = pyodide.FS.readFile(outputPath);
+            const transferable = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+            self.postMessage({ type: "done", id, outputName, outputSize: bytes.byteLength, outputBuffer: transferable, pages, textSummary }, [transferable]);
+          }
+        } catch (error) {
+          await terminateOCR();
+          send("job-error", { id, message: safeMessage(error), stack: error && error.stack ? error.stack : "" });
+        } finally {
+          try { callPython("pp_close", id); } catch (error) {}
+          if (mounted) unmountInput(mounted.mountPath);
+          if (outputPath) {
+            try { pyodide.FS.unlink(outputPath); } catch (error) {}
+          }
+          if (staged) await removeStagedInput(id);
+          activeJobId = null;
+        }
+      }
+
+      async function removeStagedInput(jobId) {
+        if (!navigator.storage || !navigator.storage.getDirectory) return;
+        try {
+          const root = await navigator.storage.getDirectory();
+          const pixelpress = await root.getDirectoryHandle("pixelpress");
+          const jobs = await pixelpress.getDirectoryHandle("jobs");
+          const directory = await jobs.getDirectoryHandle(jobId);
+          await directory.removeEntry("input.pdf");
+        } catch (error) {}
+      }
+
+      async function removeOPFSJob(id) {
+        if (!navigator.storage || !navigator.storage.getDirectory) return;
+        try {
+          const root = await navigator.storage.getDirectory();
+          const pixelpress = await root.getDirectoryHandle("pixelpress");
+          const jobs = await pixelpress.getDirectoryHandle("jobs");
+          await jobs.removeEntry(id, { recursive: true });
+        } catch (error) {}
+      }
+
+      self.onmessage = async (event) => {
+        const { type } = event.data || {};
+        if (type === "process") await processJob(event.data);
+        if (type === "remove") await removeOPFSJob(event.data.id);
+      };
+
+      boot();
+    }
+
+    const iconPaths = {
+      upload: <><path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5"/><path d="M5 14.5v3A2.5 2.5 0 0 0 7.5 20h9a2.5 2.5 0 0 0 2.5-2.5v-3"/></>,
+      download: <><path d="M12 4v12m0 0 4.5-4.5M12 16l-4.5-4.5"/><path d="M5 19.5h14"/></>,
+      trash: <><path d="M4.5 7h15M9 11v5m6-5v5M7 7l.7 12h8.6L17 7M9 7l.8-3h4.4l.8 3"/></>,
+      close: <path d="m7 7 10 10M17 7 7 17"/>,
+      plus: <path d="M12 5v14M5 12h14"/>,
+      settings: <><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.56V21h-4v-.08A1.7 1.7 0 0 0 8.94 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.57 15 1.7 1.7 0 0 0 3 14H3v-4h.08A1.7 1.7 0 0 0 4.6 8.94a1.7 1.7 0 0 0-.34-1.88L4.2 7l2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.57 1.7 1.7 0 0 0 10 3V3h4v.08A1.7 1.7 0 0 0 15.06 4.6a1.7 1.7 0 0 0 1.88-.34L17 4.2 19.83 7l-.06.06A1.7 1.7 0 0 0 19.43 9 1.7 1.7 0 0 0 21 10h.08v4H21A1.7 1.7 0 0 0 19.4 15Z"/></>,
+      lock: <><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></>,
+      info: <><circle cx="12" cy="12" r="9"/><path d="M12 11v5m0-8h.01"/></>,
+      retry: <><path d="M20 7v5h-5"/><path d="M18.5 16A7.5 7.5 0 1 1 20 12"/></>,
+      chevron: <path d="m8 10 4 4 4-4"/>,
+    };
+
+    function Icon({ name, size = 18 }) {
+      return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{iconPaths[name]}</svg>;
+    }
+
+    function formatBytes(bytes) {
+      if (bytes == null) return "";
+      if (bytes < 1024) return `${bytes} B`;
+      const units = ["KB", "MB", "GB"];
+      let value = bytes / 1024;
+      let unit = units[0];
+      for (let index = 1; value >= 1024 && index < units.length; index += 1) {
+        value /= 1024;
+        unit = units[index];
+      }
+      return `${value >= 10 ? value.toFixed(1) : value.toFixed(2)} ${unit}`;
+    }
+
+    function formatTextSummary(summary, pages) {
+      if (!summary) return `Ready, ${pages} page${pages === 1 ? "" : "s"} processed locally`;
+      const parts = [];
+      if (summary.nativePages) parts.push(`${summary.nativePages} native text preserved`);
+      if (summary.rebuiltPages) parts.push(`${summary.rebuiltPages} text layer rebuilt`);
+      if (summary.ocrPages) parts.push(`${summary.ocrPages} page${summary.ocrPages === 1 ? "" : "s"} text recognised`);
+      if (summary.imageOnlyPages) parts.push(`${summary.imageOnlyPages} image-only`);
+      return parts.length ? `Ready: ${parts.join(" · ")}` : `Ready, ${pages} page${pages === 1 ? "" : "s"} processed locally`;
+    }
+
+    function RadioGroup({ name, value, onChange, options, columns = 2 }) {
+      return (
+        <div className={`segmented ${columns === 3 ? "three" : ""}`}>
+          {options.map((option) => {
+            const id = `${name}-${option.value}`;
+            return <span key={option.value} style={{ display: "contents" }}>
+              <input id={id} type="radio" name={name} value={option.value} checked={value === option.value} onChange={() => onChange(option.value)} />
+              <label htmlFor={id}>{option.label}</label>
+            </span>;
+          })}
+        </div>
+      );
+    }
+
+    function RangeControl({ id, label, value, min, max, unit, onChange }) {
+      const [draft, setDraft] = useState(String(value));
+      useEffect(() => setDraft(String(value)), [value]);
+      const commit = () => {
+        const parsed = Number(draft);
+        const bounded = Number.isFinite(parsed) ? Math.max(min, Math.min(max, Math.round(parsed))) : value;
+        setDraft(String(bounded));
+        if (bounded !== value) onChange(bounded);
+      };
+      const updateRange = (next) => {
+        const bounded = Math.max(min, Math.min(max, Number(next)));
+        setDraft(String(bounded));
+        onChange(bounded);
+      };
+      return (
+        <div>
+          <label className="sub-label" htmlFor={id}><span>{label}</span><output>{value}{unit}</output></label>
+          <div className="range-row">
+            <input id={id} type="range" min={min} max={max} value={value} onChange={(event) => updateRange(event.target.value)} />
+            <input
+              className="number-input"
+              aria-label={`${label} numeric value`}
+              type="number"
+              inputMode="numeric"
+              min={min}
+              max={max}
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              onBlur={commit}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  commit();
+                }
+              }}
+            />
+          </div>
+        </div>
+      );
+    }
+
+    function SettingsPanel({ settings, setSettings, open, setOpen, runtime, storageText }) {
+      const patch = (change) => setSettings((current) => ({ ...current, ...change }));
+      // Entering Custom clones whatever the active preset actually runs, so the
+      // sliders open on the values you were just using instead of stale ones.
+      const resolved = resolveSettings(settings);
+      const choosePreset = (value) => patch(value === "custom"
+        ? { preset: value, strategy: resolved.strategy, dpi: resolved.dpi, jpegQuality: resolved.jpegQuality }
+        : { preset: value });
+      return (
+        <aside className={`settings-panel ${open ? "open" : ""}`} aria-label="Compression settings">
+          <div className="brand-row">
+            <div className="brand-mark"><Icon name="download" size={21} /></div>
+            <div className="brand-copy"><h1 className="brand-name">PixelPress</h1><p className="brand-mode">PDF Compressor</p></div>
+            <button className="settings-toggle" type="button" onClick={() => setOpen(!open)} aria-expanded={open}>
+              <Icon name="settings" size={16} /><span>Settings</span>
+            </button>
+          </div>
+          <div className="settings-scroll">
+            <div className="privacy-note">
+              <Icon name="lock" size={21} />
+              <div><strong>Your files are safe</strong><p>Processing happens locally on-device. Nothing is uploaded to the cloud.</p></div>
+            </div>
+            <form className="settings-form" onSubmit={(event) => event.preventDefault()}>
+              <fieldset className="form-section">
+                <legend className="section-label">Compression</legend>
+                <RadioGroup
+                  name="preset"
+                  value={settings.preset}
+                  onChange={choosePreset}
+                  columns={3}
+                  options={[
+                    { value: "high", label: "High" },
+                    { value: "balanced", label: "Balanced" },
+                    { value: "custom", label: "Custom" },
+                  ]}
+                />
+                <p className="preset-note">{PRESET_COPY[settings.preset]}</p>
+              </fieldset>
+              <fieldset className="form-section">
+                <legend className="section-label">Searchable text</legend>
+                <label className="check-control">
+                  <input type="checkbox" checked={settings.recognizeText} onChange={(event) => patch({ recognizeText: event.target.checked })} />
+                  <span className="check-copy">
+                    <strong>Recognise missing text <span className="experimental-tag">English</span></strong>
+                    <span>If a page has no selectable text, read it to make it searchable.</span>
+                  </span>
+                </label>
+              </fieldset>
+              {settings.preset === "custom" && <fieldset className="form-section control-stack">
+                <legend className="section-label">Advanced settings</legend>
+                <div>
+                  <span className="sub-label"><span>Strategy</span></span>
+                  <div className="strategy-group">
+                    <RadioGroup
+                      name="strategy"
+                      value={settings.strategy}
+                      onChange={(value) => patch({ strategy: value })}
+                      options={[
+                        { value: "flatten", label: "Flatten pages" },
+                        { value: "optimize", label: "Optimise images" },
+                      ]}
+                    />
+                  </div>
+                  <p className="preset-note">{STRATEGY_COPY[settings.strategy]}</p>
+                </div>
+                <RangeControl id="dpi" label="Maximum resolution" value={settings.dpi} min={48} max={300} unit=" DPI" onChange={(value) => patch({ dpi: value })} />
+                <RangeControl id="jpeg-quality" label="JPEG quality" value={settings.jpegQuality} min={35} max={95} unit="%" onChange={(value) => patch({ jpegQuality: value })} />
+              </fieldset>}
+              <button className="secondary-button full" type="button" onClick={() => setSettings(DEFAULT_SETTINGS)}>Reset to default</button>
+            </form>
+          </div>
+          <footer className="settings-footer">
+            <div className="runtime-line">
+              <span className="runtime-label"><span className={`status-dot ${runtime.status}`}></span>{runtime.message}</span>
+            </div>
+            <div className="storage-line">{storageText}</div>
+          </footer>
+        </aside>
+      );
+    }
+
+    function DropZone({ compact = false, dragging, onDrag, onFiles }) {
+      const inputRef = useRef(null);
+      const openPicker = () => inputRef.current?.click();
+      const drop = (event) => {
+        event.preventDefault();
+        onDrag(false);
+        onFiles(event.dataTransfer.files);
+      };
+      const dragOver = (event) => { event.preventDefault(); onDrag(true); };
+      return <>
+        <button type="button" className={`${compact ? "compact-drop" : "drop-zone"} ${dragging ? "dragging" : ""}`} onClick={openPicker} onDragEnter={dragOver} onDragOver={dragOver} onDragLeave={() => onDrag(false)} onDrop={drop}>
+          {compact ? <><Icon name="plus" size={17} /><span>Drop more PDFs here or choose files</span></> :
+            <span className="drop-content">
+              <span className="drop-icon"><Icon name="upload" size={28} /></span>
+              <h2>Drop PDFs here to compress</h2>
+              <span className="drop-cta"><Icon name="plus" size={16} /> Choose PDF files</span>
+              <span className="drop-meta">Up to 250 MB per file</span>
+            </span>}
+        </button>
+        <input ref={inputRef} className="sr-only" type="file" accept="application/pdf,.pdf" multiple onChange={(event) => { onFiles(event.target.files); event.target.value = ""; }} />
+      </>;
+    }
+
+    function JobRow({ job, onDownload, onCancel, onRemove, onRetry }) {
+      const savings = job.outputSize != null ? Math.round((1 - job.outputSize / job.originalSize) * 100) : null;
+      const active = job.status === "processing";
+      const running = active || job.status === "pending";
+      const removable = ["done", "error", "cancelled"].includes(job.status);
+      const custom = job.settings.preset === "custom";
+      return (
+        <article className="job-row" aria-live="polite">
+          <div className="file-glyph">PDF</div>
+          <div className="job-main">
+            <div className="job-title-line"><span className="job-name" title={job.name}>{job.name}</span><span className={`status-chip ${job.status}`}>{job.status}</span></div>
+            <div className="job-metadata">
+              <span className="size-change" title={job.outputSize != null ? "Original size, then compressed size" : "Original size"}>
+                {formatBytes(job.originalSize)}
+                {job.outputSize != null && <><span className="size-arrow">→</span><span className="result-size">{formatBytes(job.outputSize)}</span></>}
+              </span>
+              {savings != null && <span className={`savings ${savings < 0 ? "negative" : ""}`}>{savings >= 0 ? `${savings}% smaller` : `${Math.abs(savings)}% larger`}</span>}
+              <span>{job.settings.preset[0].toUpperCase() + job.settings.preset.slice(1)}</span>
+              {custom && <span>{job.settings.strategy === "flatten" ? "Flattened" : "Image optimised"}</span>}
+              {custom && <span>{job.settings.dpi} DPI</span>}
+              {custom && <span>JPEG {job.settings.jpegQuality}%</span>}
+            </div>
+            {running && <div className="progress-track" aria-label={`${Math.round(job.progress)}% complete`}><div className="progress-fill" style={{ transform: `scaleX(${job.progress / 100})` }} /></div>}
+            {job.status !== "done" && <p className={`job-detail ${job.status === "error" ? "error" : ""}`}>{job.message}</p>}
+          </div>
+          <div className="job-actions">
+            {job.status === "done" && <button className="primary-button" type="button" onClick={() => onDownload(job)}><Icon name="download" size={16} /><span>Download</span></button>}
+            {active && <button className="secondary-button" type="button" onClick={() => onCancel(job.id)}>Cancel</button>}
+            {job.status === "error" && <button className="secondary-button" type="button" onClick={() => onRetry(job.id)}><Icon name="retry" size={15} /><span className="sr-only">Retry</span></button>}
+            {removable && <button className="text-button danger" type="button" onClick={() => onRemove(job.id)}>Remove</button>}
+          </div>
+        </article>
+      );
+    }
+
+    function App() {
+      const [settings, setSettings] = useState(() => {
+        try {
+          const stored = JSON.parse(localStorage.getItem("pixelpress-browser-settings") || "{}");
+          const preset = ["high", "balanced", "custom"].includes(stored.preset) ? stored.preset : DEFAULT_SETTINGS.preset;
+          const strategy = ["flatten", "optimize"].includes(stored.strategy) ? stored.strategy : DEFAULT_SETTINGS.strategy;
+          return { ...DEFAULT_SETTINGS, ...stored, preset, strategy };
+        }
+        catch (error) { return DEFAULT_SETTINGS; }
+      });
+      const [jobs, setJobs] = useState([]);
+      const [runtime, setRuntime] = useState({ status: "loading", message: "Starting browser engine", opfs: false });
+      const [notice, setNotice] = useState(null);
+      const [dragging, setDragging] = useState(false);
+      const [settingsOpen, setSettingsOpen] = useState(false);
+      const [storageText, setStorageText] = useState("Checking private storage");
+      const workerRef = useRef(null);
+      const activeRef = useRef(null);
+      const processingRef = useRef(false);
+      const jobsRef = useRef(jobs);
+      const objectUrlsRef = useRef(new Map());
+
+      useEffect(() => { jobsRef.current = jobs; }, [jobs]);
+      useEffect(() => { localStorage.setItem("pixelpress-browser-settings", JSON.stringify(settings)); }, [settings]);
+
+      const updateJob = useCallback((id, change) => {
+        setJobs((current) => current.map((job) => job.id === id ? { ...job, ...change } : job));
+      }, []);
+
+      const startWorker = useCallback(() => {
+        if (workerRef.current) workerRef.current.terminate();
+        setRuntime({ status: "loading", message: "Starting browser engine", opfs: false });
+        const source = `import { loadPyodide } from "https://cdn.jsdelivr.net/npm/pyodide@314.0.6/pyodide.mjs";\nself.postMessage({ type: "runtime", status: "loading", message: "Worker connected" });\n(${PixelPressWorker.toString()})()`;
+        const url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
+        const worker = new Worker(url, { type: "module" });
+        setTimeout(() => URL.revokeObjectURL(url), 2000);
+        workerRef.current = worker;
+        worker.onmessage = (event) => {
+          const data = event.data || {};
+          if (data.type === "runtime") {
+            setRuntime({ status: data.status, message: data.message, opfs: Boolean(data.opfs) });
+            if (data.status === "error") setNotice({ kind: "error", text: `The browser engine could not start: ${data.message}` });
+            return;
+          }
+          if (data.type === "progress") {
+            updateJob(data.id, { status: "processing", progress: data.progress, message: data.message });
+            return;
+          }
+          if (data.type === "warning") {
+            updateJob(data.id, { warning: data.message });
+            setNotice({ kind: "warning", text: data.message });
+            return;
+          }
+          if (data.type === "done") {
+            let downloadUrl = null;
+            if (data.outputBuffer) {
+              downloadUrl = URL.createObjectURL(new Blob([data.outputBuffer], { type: "application/pdf" }));
+              objectUrlsRef.current.set(data.id, downloadUrl);
+            }
+            updateJob(data.id, { status: "done", progress: 100, message: formatTextSummary(data.textSummary, data.pages), textSummary: data.textSummary || null, outputName: data.outputName, outputSize: data.outputSize, opfsPath: data.opfsPath || null, downloadUrl });
+            processingRef.current = false;
+            activeRef.current = null;
+            return;
+          }
+          if (data.type === "job-error") {
+            updateJob(data.id, { status: "error", message: data.message, progress: 0 });
+            processingRef.current = false;
+            activeRef.current = null;
+          }
+        };
+        worker.onerror = (event) => {
+          console.error("PixelPress worker error", event.message, event.filename, event.lineno);
+          const id = activeRef.current;
+          if (id) updateJob(id, { status: "error", message: event.message || "The processing worker stopped unexpectedly.", progress: 0 });
+          processingRef.current = false;
+          activeRef.current = null;
+          setRuntime({ status: "error", message: "Browser engine stopped", opfs: false });
+        };
+      }, [updateJob]);
+
+      const refreshStorage = useCallback(() => {
+        if (!navigator.storage?.estimate) {
+          setStorageText("Private storage unavailable");
+          return;
+        }
+        navigator.storage.estimate()
+          .then(({ usage, quota }) => setStorageText(`${formatBytes(usage || 0)} used of ${formatBytes(quota || 0)} browser storage`))
+          .catch(() => setStorageText("Private storage estimate unavailable"));
+      }, []);
+
+      // Reads back finished jobs written to OPFS by earlier sessions, and deletes
+      // anything past the retention window. Job folders that are recent but have no
+      // metadata belong to a run that is still in flight (or was interrupted), so they
+      // are left alone rather than pulled out from under another tab.
+      const restoreHistory = useCallback(async () => {
+        if (!navigator.storage?.getDirectory) return;
+        let jobsDirectory;
+        try {
+          const root = await navigator.storage.getDirectory();
+          const pixelpress = await root.getDirectoryHandle("pixelpress");
+          jobsDirectory = await pixelpress.getDirectoryHandle("jobs");
+        } catch (error) { return; }
+
+        const cutoff = Date.now() - HISTORY_MAX_AGE_MS;
+        const restored = [];
+        const expired = [];
+        try {
+          for await (const [jobId, handle] of jobsDirectory.entries()) {
+            if (handle.kind !== "directory") continue;
+            let metadata = null;
+            let hasOutput = false;
+            let newestFile = 0;
+            try {
+              for await (const [fileName, fileHandle] of handle.entries()) {
+                if (fileHandle.kind !== "file") continue;
+                const file = await fileHandle.getFile();
+                newestFile = Math.max(newestFile, file.lastModified || 0);
+                if (fileName.startsWith("output.")) hasOutput = true;
+                if (fileName === "metadata.json") {
+                  try { metadata = JSON.parse(await file.text()); } catch (error) { metadata = null; }
+                }
+              }
+            } catch (error) { continue; }
+
+            const completedAt = (metadata && metadata.completedAt) || newestFile;
+            if (completedAt && completedAt < cutoff) { expired.push(jobId); continue; }
+            if (!metadata || !metadata.opfsPath) continue;
+            if (!hasOutput) { expired.push(jobId); continue; }
+
+            try { await handle.removeEntry("input.pdf"); } catch (error) {}
+            restored.push({
+              id: jobId,
+              name: metadata.originalName || metadata.outputName || jobId,
+              originalSize: metadata.originalSize || 0,
+              outputSize: metadata.size != null ? metadata.size : null,
+              settings: { ...DEFAULT_SETTINGS, ...(metadata.settings || {}) },
+              status: "done",
+              progress: 100,
+              completedAt,
+              message: formatTextSummary(metadata.textSummary, 0),
+              textSummary: metadata.textSummary || null,
+              outputName: metadata.outputName || "document-pixelpress.pdf",
+              opfsPath: metadata.opfsPath,
+              downloadUrl: null,
+            });
+          }
+        } catch (error) { return; }
+
+        for (const jobId of expired) {
+          try { await jobsDirectory.removeEntry(jobId, { recursive: true }); } catch (error) {}
+        }
+        restored.sort((a, b) => b.completedAt - a.completedAt);
+        if (restored.length) setJobs((current) => [...current, ...restored]);
+        refreshStorage();
+      }, [refreshStorage]);
+
+      useEffect(() => {
+        startWorker();
+        refreshStorage();
+        restoreHistory();
+        return () => {
+          workerRef.current?.terminate();
+          objectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+        };
+      }, [startWorker, refreshStorage, restoreHistory]);
+
+      useEffect(() => {
+        if (runtime.status !== "ready" || processingRef.current) return;
+        const next = jobs.find((job) => job.status === "pending" && job.file);
+        if (!next) return;
+        processingRef.current = true;
+        activeRef.current = next.id;
+        updateJob(next.id, { status: "processing", progress: 1, message: "Sending file to the local worker" });
+        workerRef.current.postMessage({ type: "process", id: next.id, file: next.file, settings: next.settings });
+      }, [jobs, runtime.status, updateJob]);
+
+      const addFiles = useCallback((fileList) => {
+        const accepted = [];
+        const rejected = [];
+        const jobSettings = resolveSettings(settings);
+        for (const file of Array.from(fileList || [])) {
+          if (!(file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf"))) rejected.push(`${file.name} is not a PDF`);
+          else if (file.size > MAX_FILE_BYTES) rejected.push(`${file.name} is larger than 250 MB`);
+          else accepted.push({
+            id: `job-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+            file,
+            name: file.name,
+            originalSize: file.size,
+            settings: jobSettings,
+            status: "pending",
+            progress: 0,
+            message: "Waiting for the browser engine",
+          });
+        }
+        if (accepted.length) {
+          setJobs((current) => [...accepted, ...current]);
+          setNotice(null);
+          navigator.storage?.persist?.().catch(() => {});
+        }
+        if (rejected.length) setNotice({ kind: "warning", text: rejected.join(". ") });
+      }, [settings]);
+
+      const readOPFSFile = async (path) => {
+        const parts = path.split("/").filter(Boolean);
+        const filename = parts.pop();
+        let directory = await navigator.storage.getDirectory();
+        for (const part of parts) directory = await directory.getDirectoryHandle(part);
+        return (await directory.getFileHandle(filename)).getFile();
+      };
+
+      const downloadJob = async (job) => {
+        try {
+          let url = job.downloadUrl;
+          if (!url && job.opfsPath) {
+            const file = await readOPFSFile(job.opfsPath);
+            url = URL.createObjectURL(file);
+          }
+          if (!url) throw new Error("The local output could not be found.");
+          const link = document.createElement("a");
+          link.href = url;
+          link.download = job.outputName;
+          document.body.appendChild(link);
+          link.click();
+          link.remove();
+          if (!job.downloadUrl) setTimeout(() => URL.revokeObjectURL(url), 1000);
+        } catch (error) {
+          setNotice({ kind: "error", text: `Download failed: ${error.message}` });
+        }
+      };
+
+      const removeJob = (id) => {
+        const url = objectUrlsRef.current.get(id);
+        if (url) { URL.revokeObjectURL(url); objectUrlsRef.current.delete(id); }
+        workerRef.current?.postMessage({ type: "remove", id });
+        setJobs((current) => current.filter((job) => job.id !== id));
+      };
+
+      const cancelJob = (id) => {
+        if (activeRef.current !== id) return;
+        workerRef.current?.terminate();
+        processingRef.current = false;
+        activeRef.current = null;
+        updateJob(id, { status: "cancelled", message: "Cancelled, partial local files can be removed", progress: 0 });
+        startWorker();
+      };
+
+      const retryJob = (id) => {
+        updateJob(id, { status: "pending", message: "Waiting to retry", progress: 0 });
+        if (runtime.status === "error") startWorker();
+      };
+
+      const clearFinished = () => {
+        jobsRef.current.filter((job) => ["done", "error", "cancelled"].includes(job.status)).forEach((job) => {
+          const url = objectUrlsRef.current.get(job.id);
+          if (url) URL.revokeObjectURL(url);
+          workerRef.current?.postMessage({ type: "remove", id: job.id });
+        });
+        setJobs((current) => current.filter((job) => !["done", "error", "cancelled"].includes(job.status)));
+        objectUrlsRef.current.clear();
+      };
+
+      const completedCount = useMemo(() => jobs.filter((job) => job.status === "done").length, [jobs]);
+      const clearable = jobs.some((job) => ["done", "error", "cancelled"].includes(job.status));
+
+      return (
+        <div className="app-shell">
+          <SettingsPanel settings={settings} setSettings={setSettings} open={settingsOpen} setOpen={setSettingsOpen} runtime={runtime} storageText={storageText} />
+          <main className="workspace">
+            <div className={`workspace-body ${jobs.length === 0 ? "is-empty" : ""}`}>
+              <div className="content-width notice-stack">
+                {runtime.status === "loading" && <div className="notice"><Icon name="info" size={18} /><span>Loading Python and the PDF library. You can choose files once it is ready.</span></div>}
+                {notice && <div className={`notice ${notice.kind}`}><Icon name="info" size={18} /><span>{notice.text}</span></div>}
+              </div>
+              <div className="content-width main-stack">
+                {jobs.length === 0 ? <DropZone dragging={dragging} onDrag={setDragging} onFiles={addFiles} /> : <>
+                  <DropZone compact dragging={dragging} onDrag={setDragging} onFiles={addFiles} />
+                  <div className="queue-head"><div><h2>Files</h2><p>Each file keeps the settings active when it was added. Results stay on this device for {HISTORY_MAX_AGE_DAYS} days.</p></div><button className="text-button" type="button" onClick={clearFinished} disabled={!clearable}>Clear finished</button></div>
+                  <section className="queue-list" aria-label="PDF processing queue">
+                    {jobs.map((job) => <JobRow key={job.id} job={job} onDownload={downloadJob} onCancel={cancelJob} onRemove={removeJob} onRetry={retryJob} />)}
+                  </section>
+                </>}
+              </div>
+            </div>
+            <footer className="workspace-footer">
+              <span>Made by <a href="https://itsjin.com" target="_blank" rel="noopener noreferrer">Jin</a></span>
+              <span className="version">v0.3</span>
+            </footer>
+          </main>
+        </div>
+      );
+    }
+
+    createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>
