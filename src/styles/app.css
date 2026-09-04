@@ -552,17 +552,31 @@ input[type='range'] {
   line-height: 1.55;
 }
 .drop-cta {
+  min-height: 40px;
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  margin-top: 20px;
-  color: var(--accent);
+  justify-content: center;
+  gap: 8px;
+  margin-top: 22px;
+  padding: 9px 16px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  color: var(--accent-ink);
+  background: var(--accent);
   font-size: 0.78rem;
   font-weight: 700;
+  transition:
+    background-color 180ms var(--ease-out),
+    border-color 180ms var(--ease-out);
+}
+.drop-zone:hover .drop-cta,
+.drop-zone.dragging .drop-cta {
+  border-color: var(--accent-hover);
+  background: var(--accent-hover);
 }
 .drop-meta {
   display: block;
-  margin-top: 12px;
+  margin-top: 14px;
   color: var(--ink-faint);
   font-size: 0.68rem;
 }
