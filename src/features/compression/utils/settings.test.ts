@@ -85,8 +85,8 @@ describe('normalizeStoredSettings', () => {
     );
   });
 
-  it('migrates the retired presets', () => {
-    expect(normalizeStoredSettings({ preset: 'high' }).preset).toBe('figma');
-    expect(normalizeStoredSettings({ preset: 'balanced' }).preset).toBe('auto');
+  it('falls back to the default preset for a retired one', () => {
+    expect(normalizeStoredSettings({ preset: 'high' }).preset).toBe(DEFAULT_SETTINGS.preset);
+    expect(normalizeStoredSettings({ preset: 'balanced' }).preset).toBe(DEFAULT_SETTINGS.preset);
   });
 });

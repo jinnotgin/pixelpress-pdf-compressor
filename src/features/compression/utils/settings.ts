@@ -107,16 +107,10 @@ export function resolveSettings(settings: Settings): ResolvedSettings {
 export function normalizeStoredSettings(raw: unknown): Settings {
   if (!raw || typeof raw !== 'object') return DEFAULT_SETTINGS;
   const stored = raw as Partial<Settings>;
-  const legacyPreset =
-    stored.preset === ('high' as Preset)
-      ? 'figma'
-      : stored.preset === ('balanced' as Preset)
-        ? 'auto'
-        : stored.preset;
   return {
     ...DEFAULT_SETTINGS,
     ...stored,
-    preset: isPreset(legacyPreset) ? legacyPreset : DEFAULT_SETTINGS.preset,
+    preset: isPreset(stored.preset) ? stored.preset : DEFAULT_SETTINGS.preset,
     strategy: isStrategy(stored.strategy) ? stored.strategy : DEFAULT_SETTINGS.strategy,
     imageDetail: isImageDetail(stored.imageDetail)
       ? stored.imageDetail
