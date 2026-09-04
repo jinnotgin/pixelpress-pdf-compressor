@@ -89,25 +89,9 @@ export function SettingsPanel({
             />
             <p className="preset-note">{PRESET_COPY[settings.preset]}</p>
           </fieldset>
-          <fieldset className="form-section">
-            <legend className="section-label">Searchable text</legend>
-            <label className="check-control">
-              <input
-                type="checkbox"
-                checked={settings.recognizeText}
-                onChange={(event) => patch({ recognizeText: event.target.checked })}
-              />
-              <span className="check-copy">
-                <strong>
-                  Recognise missing text <span className="experimental-tag">English</span>
-                </strong>
-                <span>If a page has no selectable text, read it to make it searchable.</span>
-              </span>
-            </label>
-          </fieldset>
           {settings.preset === 'custom' && (
             <fieldset className="form-section control-stack">
-              <legend className="section-label">Advanced settings</legend>
+              <legend className="section-label">Compression Settings</legend>
               <div>
                 <span className="sub-label">
                   <span>Strategy</span>
@@ -147,6 +131,22 @@ export function SettingsPanel({
               />
             </fieldset>
           )}
+          <fieldset className="form-section">
+            <legend className="section-label">Searchable text</legend>
+            <label className="check-control">
+              <input
+                type="checkbox"
+                checked={settings.recognizeText}
+                onChange={(event) => patch({ recognizeText: event.target.checked })}
+              />
+              <span className="check-copy">
+                <strong>
+                  Recognise missing text <span className="experimental-tag">English</span>
+                </strong>
+                <span>If a page has no selectable text, read it to make it searchable.</span>
+              </span>
+            </label>
+          </fieldset>
           <button
             className="secondary-button full"
             type="button"
