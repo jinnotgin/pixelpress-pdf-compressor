@@ -1,10 +1,11 @@
 # PixelPress
 
-A PDF compressor for Figma PDF exports, which often end up being huge. PixelPress
-makes them small enough to share.
+A browser-only PDF compressor that automatically preserves efficient document
+pages and flattens clearly vector-heavy exports. A dedicated Figma preset keeps
+the original aggressive flattening workflow for screens and diagrams.
 
 Everything runs in the browser: Pyodide + PyMuPDF do the PDF work and Tesseract
-handles optional English OCR, all inside a Web Worker. Nothing is uploaded to any
+handles optional multilingual OCR, all inside a Web Worker. Nothing is uploaded to any
 cloud services.
 
 A Vite + React + TypeScript app, organised with a
@@ -73,6 +74,15 @@ Python lives in `workers/pixelpress.py` and is pulled in as a raw string
 (`import PYTHON_SOURCE from './pixelpress.py?raw'`), so it stays readable and
 lints as real Python.
 
+### Inspecting Auto decisions
+
+Open the browser developer tools, select **Console**, and filter for
+`PixelPress strategy`. Every compression job logs a collapsed, per-page table
+showing the selected action, reason, text counts, largest-image coverage,
+content-stream size, individual document features, protection status, and each Auto threshold result. The
+report contains structural numbers only—never filenames, extracted text, page
+images, or PDF bytes.
+
 ### State ownership
 
 - `usePersistentSettings`: settings form state, mirrored to `localStorage` and
@@ -86,6 +96,8 @@ lints as real Python.
 - OPFS (`navigator.storage.getDirectory`) is used for streaming large inputs and
   persisting results for 30 days. Where it is unavailable the worker falls back
   to in-memory transfer and the UI shows `Ready (M)`.
-- OCR is English-only and runs solely on pages without usable selectable text.
+- OCR supports English, Simplified Chinese, Traditional Chinese, Malay, and Tamil. It runs solely on pages without usable selectable text.
+- Signed PDFs are kept byte-for-byte unchanged. When compression does not beat
+  the source size, PixelPress returns the original instead.
 - Requires a modern browser with module Web Workers and `SharedArrayBuffer`-free
   Pyodide (no COOP/COEP headers needed).

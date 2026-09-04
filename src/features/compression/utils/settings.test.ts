@@ -4,14 +4,14 @@ import { type Settings } from '../types';
 import { DEFAULT_SETTINGS, normalizeStoredSettings, resolveSettings } from './settings';
 
 describe('resolveSettings', () => {
-  it('expands the high preset to a fixed flatten recipe', () => {
-    const resolved = resolveSettings({ ...DEFAULT_SETTINGS, preset: 'high', dpi: 300 });
-    expect(resolved).toMatchObject({ preset: 'high', strategy: 'flatten', dpi: 96, jpegQuality: 78 });
+  it('expands the auto preset to a fixed automatic recipe', () => {
+    const resolved = resolveSettings({ ...DEFAULT_SETTINGS, preset: 'auto', dpi: 300 });
+    expect(resolved).toMatchObject({ preset: 'auto', strategy: 'auto', dpi: 96, jpegQuality: 78 });
   });
 
-  it('expands the balanced preset to a fixed optimize recipe', () => {
-    const resolved = resolveSettings({ ...DEFAULT_SETTINGS, preset: 'balanced', strategy: 'flatten' });
-    expect(resolved).toMatchObject({ preset: 'balanced', strategy: 'optimize', dpi: 96 });
+  it('expands the Figma preset to a fixed flatten recipe', () => {
+    const resolved = resolveSettings({ ...DEFAULT_SETTINGS, preset: 'figma', strategy: 'optimize' });
+    expect(resolved).toMatchObject({ preset: 'figma', strategy: 'flatten', dpi: 96 });
   });
 
   it('passes custom values through untouched', () => {
@@ -21,14 +21,20 @@ describe('resolveSettings', () => {
       dpi: 133,
       jpegQuality: 61,
       recognizeText: false,
+      ocrLanguage: 'tam',
     };
     expect(resolveSettings(custom)).toEqual(custom);
   });
 
-  it('always takes recognizeText from the live settings', () => {
-    expect(resolveSettings({ ...DEFAULT_SETTINGS, preset: 'high', recognizeText: false }).recognizeText).toBe(
-      false,
-    );
+  it('always takes OCR preferences from the live settings', () => {
+    const resolved = resolveSettings({
+      ...DEFAULT_SETTINGS,
+      preset: 'figma',
+      recognizeText: false,
+      ocrLanguage: 'chi_tra',
+    });
+    expect(resolved.recognizeText).toBe(false);
+    expect(resolved.ocrLanguage).toBe('chi_tra');
   });
 });
 
@@ -39,9 +45,24 @@ describe('normalizeStoredSettings', () => {
   });
 
   it('drops invalid enum values but keeps valid overrides', () => {
-    const result = normalizeStoredSettings({ preset: 'bogus', strategy: 'flatten', jpegQuality: 40 });
+    const result = normalizeStoredSettings({
+      preset: 'bogus',
+      strategy: 'flatten',
+      jpegQuality: 40,
+      ocrLanguage: 'not-a-language',
+    });
     expect(result.preset).toBe(DEFAULT_SETTINGS.preset);
     expect(result.strategy).toBe('flatten');
     expect(result.jpegQuality).toBe(40);
+    expect(result.ocrLanguage).toBe('eng');
+  });
+
+  it('keeps a supported OCR language', () => {
+    expect(normalizeStoredSettings({ ocrLanguage: 'msa' }).ocrLanguage).toBe('msa');
+  });
+
+  it('migrates the retired presets', () => {
+    expect(normalizeStoredSettings({ preset: 'high' }).preset).toBe('figma');
+    expect(normalizeStoredSettings({ preset: 'balanced' }).preset).toBe('auto');
   });
 });

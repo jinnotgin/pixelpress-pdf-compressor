@@ -8,6 +8,7 @@ import {
   type Notice,
   type RuntimeState,
   type Settings,
+  type StrategyDebugReport,
   type WorkerOutbound,
 } from '../types';
 import { intakeFiles, isRemovable } from '../utils/jobs';
@@ -20,6 +21,34 @@ const INITIAL_RUNTIME: RuntimeState = {
   message: 'Starting browser engine',
   opfs: false,
 };
+
+function logStrategyDebug(report: StrategyDebugReport): void {
+  console.groupCollapsed('[PixelPress strategy] Auto decision report');
+  console.info(report.documentReason);
+  console.info('Detected PDF features:', report.documentFeatures);
+  console.info('Auto thresholds and copyable report:', report);
+  if (report.pages.length) {
+    console.table(
+      report.pages.map((page) => ({
+        page: page.page,
+        action: page.finalAction,
+        decision: page.decision,
+        reason: page.reason,
+        usableText: page.usableText,
+        words: page.words,
+        characters: page.characters,
+        imageCoverage: `${page.largestImageCoveragePercent}%`,
+        contentBytes: page.contentStreamBytes,
+        protected: page.protected,
+        imageBelow55: page.checks.imageCoverageBelow55Percent,
+        contentAtLeast220KB: page.checks.contentAtLeast220KB,
+        wordsBelow120: page.checks.fewerThan120Words,
+        contentAtLeast700KB: page.checks.contentAtLeast700KB,
+      })),
+    );
+  }
+  console.groupEnd();
+}
 
 export interface CompressionQueue {
   jobs: Job[];
@@ -85,7 +114,10 @@ export function useCompressionQueue(settings: Settings): CompressionQueue {
         }
         case 'warning': {
           updateJob(data.id, { warning: data.message });
-          setNotice({ kind: 'warning', text: data.message });
+          return;
+        }
+        case 'strategy-debug': {
+          logStrategyDebug(data.report);
           return;
         }
         case 'done': {
@@ -97,12 +129,13 @@ export function useCompressionQueue(settings: Settings): CompressionQueue {
           updateJob(data.id, {
             status: 'done',
             progress: 100,
-            message: formatTextSummary(data.textSummary, data.pages),
+            message: formatTextSummary(data.textSummary, data.pages, data.usedOriginal),
             textSummary: data.textSummary ?? null,
             outputName: data.outputName,
             outputSize: data.outputSize,
             opfsPath: data.opfsPath ?? null,
             downloadUrl,
+            usedOriginal: data.usedOriginal,
           });
           processingRef.current = false;
           activeRef.current = null;
@@ -112,6 +145,13 @@ export function useCompressionQueue(settings: Settings): CompressionQueue {
           updateJob(data.id, { status: 'error', message: data.message, progress: 0 });
           processingRef.current = false;
           activeRef.current = null;
+          worker.terminate();
+          if (workerRef.current === worker) workerRef.current = null;
+          setRuntime({
+            status: 'error',
+            message: 'Browser engine will restart before retrying',
+            opfs: false,
+          });
           return;
         }
       }
@@ -239,9 +279,9 @@ export function useCompressionQueue(settings: Settings): CompressionQueue {
   const retryJob = useCallback(
     (id: string) => {
       updateJob(id, { status: 'pending', message: 'Waiting to retry', progress: 0 });
-      if (runtime.status === 'error') startWorker();
+      startWorker();
     },
-    [runtime.status, startWorker, updateJob],
+    [startWorker, updateJob],
   );
 
   const clearFinished = useCallback(() => {

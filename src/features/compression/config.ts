@@ -1,4 +1,4 @@
-import { type JobStatus } from './types';
+import { type JobStatus, type OcrLanguage } from './types';
 
 /** Hard upload ceiling per file. */
 export const MAX_FILE_BYTES = 250 * 1024 * 1024;
@@ -18,6 +18,19 @@ export const PYODIDE_INDEX_URL = 'https://cdn.jsdelivr.net/pyodide/v314.0.6/full
 export const PYODIDE_MODULE_URL = 'https://cdn.jsdelivr.net/npm/pyodide@314.0.6/pyodide.mjs';
 export const TESSERACT_MODULE_URL =
   'https://cdn.jsdelivr.net/npm/tesseract.js@7.0.0/dist/tesseract.esm.min.js';
+
+/** OCR models exposed in the settings panel. */
+export const OCR_LANGUAGE_OPTIONS = [
+  { value: 'eng', label: 'English' },
+  { value: 'chi_sim', label: 'Chinese (Simplified)' },
+  { value: 'chi_tra', label: 'Chinese (Traditional)' },
+  { value: 'msa', label: 'Malay' },
+  { value: 'tam', label: 'Tamil' },
+] as const satisfies readonly { value: OcrLanguage; label: string }[];
+
+export const OCR_LANGUAGE_LABELS = Object.fromEntries(
+  OCR_LANGUAGE_OPTIONS.map(({ value, label }) => [value, label]),
+) as Record<OcrLanguage, string>;
 
 /** localStorage key for the persisted settings form. */
 export const SETTINGS_STORAGE_KEY = 'pixelpress-browser-settings';

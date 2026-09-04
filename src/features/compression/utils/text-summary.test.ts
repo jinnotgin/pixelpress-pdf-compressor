@@ -25,4 +25,10 @@ describe('formatTextSummary', () => {
       formatTextSummary({ nativePages: 0, rebuiltPages: 0, ocrPages: 0, imageOnlyPages: 0 }, 2),
     ).toBe('Ready, 2 pages processed locally');
   });
+
+  it('explains when the source file won the size comparison', () => {
+    expect(formatTextSummary(null, 8, true)).toBe(
+      'Ready: source was already compact, so the original was kept',
+    );
+  });
 });

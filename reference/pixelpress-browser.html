@@ -390,6 +390,8 @@
     .status-chip.cancelled { color: var(--ink-soft); }
     .job-detail { margin: 8px 0 0; color: var(--ink-soft); font-size: 0.7rem; line-height: 1.45; }
     .job-detail.error { color: var(--danger); }
+    .job-warning { display: flex; align-items: flex-start; gap: 6px; margin: 8px 0 0; color: oklch(0.42 0.11 69); font-size: 0.7rem; line-height: 1.45; }
+    .job-warning svg { flex: 0 0 auto; margin-top: 1px; }
     .job-metadata { display: flex; flex-wrap: wrap; gap: 7px 13px; margin-top: 6px; color: var(--ink-faint); font-size: 0.65rem; }
     .job-metadata span { display: inline-flex; align-items: center; gap: 4px; }
     .progress-track { height: 4px; margin-top: 10px; overflow: hidden; border-radius: 999px; background: var(--surface-muted); }
@@ -1190,7 +1192,7 @@ def pp_close(job_id):
                   </div>
                   <p className="preset-note">{STRATEGY_COPY[settings.strategy]}</p>
                 </div>
-                <RangeControl id="dpi" label="Maximum resolution" value={settings.dpi} min={48} max={300} unit=" DPI" onChange={(value) => patch({ dpi: value })} />
+                <RangeControl id="dpi" label="Maximum image resolution" value={settings.dpi} min={48} max={300} unit=" DPI" onChange={(value) => patch({ dpi: value })} />
                 <RangeControl id="jpeg-quality" label="JPEG quality" value={settings.jpegQuality} min={35} max={95} unit="%" onChange={(value) => patch({ jpegQuality: value })} />
               </fieldset>}
               <button className="secondary-button full" type="button" onClick={() => setSettings(DEFAULT_SETTINGS)}>Reset to default</button>
@@ -1253,6 +1255,7 @@ def pp_close(job_id):
             </div>
             {running && <div className="progress-track" aria-label={`${Math.round(job.progress)}% complete`}><div className="progress-fill" style={{ transform: `scaleX(${job.progress / 100})` }} /></div>}
             {job.status !== "done" && <p className={`job-detail ${job.status === "error" ? "error" : ""}`}>{job.message}</p>}
+            {job.warning && <p className="job-warning"><Icon name="info" size={14} /><span>{job.warning}</span></p>}
           </div>
           <div className="job-actions">
             {job.status === "done" && <button className="primary-button" type="button" onClick={() => onDownload(job)}><Icon name="download" size={16} /><span>Download</span></button>}
@@ -1314,7 +1317,6 @@ def pp_close(job_id):
           }
           if (data.type === "warning") {
             updateJob(data.id, { warning: data.message });
-            setNotice({ kind: "warning", text: data.message });
             return;
           }
           if (data.type === "done") {
@@ -1534,7 +1536,7 @@ def pp_close(job_id):
           <main className="workspace">
             <div className={`workspace-body ${jobs.length === 0 ? "is-empty" : ""}`}>
               <div className="content-width notice-stack">
-                {runtime.status === "loading" && <div className="notice"><Icon name="info" size={18} /><span>Loading Python and the PDF library. You can choose files once it is ready.</span></div>}
+                {runtime.status === "loading" && <div className="notice"><Icon name="info" size={18} /><span>Loading Python and the PDF engine. You can choose files once it is ready.</span></div>}
                 {notice && <div className={`notice ${notice.kind}`}><Icon name="info" size={18} /><span>{notice.text}</span></div>}
               </div>
               <div className="content-width main-stack">

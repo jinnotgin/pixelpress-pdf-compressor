@@ -1,7 +1,7 @@
 .app-shell {
   min-height: 100svh;
   display: grid;
-  grid-template-columns: 336px minmax(0, 1fr);
+  grid-template-columns: 360px minmax(0, 1fr);
 }
 
 .settings-panel {
@@ -89,19 +89,26 @@
 
 .settings-form {
   display: grid;
-  gap: 28px;
 }
 .form-section {
-  border: 0;
-  margin: 0;
-  padding: 0;
   min-width: 0;
 }
+/* The rule lives in the gap between sections, not under the heading, so each
+   heading stays visually attached to the controls it labels. */
+.settings-form > * + * {
+  margin-top: 22px;
+  padding-top: 22px;
+  border-top: 1px solid var(--border);
+}
+/* Sentence case, a step up in size from .sub-label. The divider above already
+   marks the boundary, so the heading only has to name the section. */
 .section-label {
   display: block;
-  margin: 0 0 11px;
-  font-size: 0.82rem;
+  width: 100%;
+  margin: 0 0 14px;
+  font-size: 0.9rem;
   font-weight: 700;
+  letter-spacing: -0.011em;
 }
 .sub-label {
   display: flex;
@@ -222,15 +229,31 @@ input[type='range'] {
   font-size: 0.72rem;
   line-height: 1.45;
 }
-.experimental-tag {
-  padding: 2px 6px;
-  border-radius: 999px;
-  color: oklch(0.42 0.11 69);
-  background: var(--warning-bg);
-  font-size: 0.61rem;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+.ocr-controls {
+  display: grid;
+  gap: 16px;
+}
+.language-control {
+  display: grid;
+  gap: 7px;
+  transition: opacity 180ms var(--ease-out);
+}
+.language-control select {
+  width: 100%;
+  min-height: 36px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+.language-control select:hover:not(:disabled) {
+  border-color: var(--border-strong);
+}
+.language-control select:disabled {
+  cursor: not-allowed;
 }
 .disabled-copy {
   opacity: 0.48;
@@ -660,6 +683,19 @@ input[type='range'] {
 }
 .job-detail.error {
   color: var(--danger);
+}
+.job-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 8px 0 0;
+  color: oklch(0.42 0.11 69);
+  font-size: 0.7rem;
+  line-height: 1.45;
+}
+.job-warning svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
 }
 .job-metadata {
   display: flex;

@@ -7,7 +7,9 @@ import { type TextSummary } from '../types';
 export function formatTextSummary(
   summary: TextSummary | null | undefined,
   pages: number,
+  usedOriginal = false,
 ): string {
+  if (usedOriginal) return 'Ready: source was already compact, so the original was kept';
   const fallback = `Ready, ${pages} page${pages === 1 ? '' : 's'} processed locally`;
   if (!summary) return fallback;
 

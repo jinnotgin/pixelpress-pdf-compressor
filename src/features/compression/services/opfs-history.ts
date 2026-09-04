@@ -13,6 +13,7 @@ interface StoredMetadata {
   completedAt?: number;
   settings?: Partial<Job['settings']>;
   textSummary?: Job['textSummary'];
+  usedOriginal?: boolean;
 }
 
 /**
@@ -88,11 +89,12 @@ export async function restoreOpfsHistory(): Promise<Job[]> {
         status: 'done',
         progress: 100,
         completedAt,
-        message: formatTextSummary(metadata.textSummary, 0),
+        message: formatTextSummary(metadata.textSummary, 0, metadata.usedOriginal),
         textSummary: metadata.textSummary ?? null,
         outputName: metadata.outputName || 'document-pixelpress.pdf',
         opfsPath: metadata.opfsPath,
         downloadUrl: null,
+        usedOriginal: metadata.usedOriginal,
       });
     }
   } catch {

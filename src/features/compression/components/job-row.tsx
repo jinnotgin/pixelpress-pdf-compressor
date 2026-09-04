@@ -18,6 +18,11 @@ export function JobRow({ job, onDownload, onCancel, onRemove, onRetry }: JobRowP
   const running = active || job.status === 'pending';
   const removable = isRemovable(job.status);
   const custom = job.settings.preset === 'custom';
+  const strategyLabel = {
+    auto: 'Auto',
+    flatten: 'Flatten',
+    optimize: 'Preserve',
+  }[job.settings.strategy];
 
   return (
     <article className="job-row" aria-live="polite">
@@ -42,13 +47,14 @@ export function JobRow({ job, onDownload, onCancel, onRemove, onRetry }: JobRowP
               </>
             )}
           </span>
-          {savings != null && (
+          {job.usedOriginal && <span className="savings">Already compact</span>}
+          {savings != null && !job.usedOriginal && (
             <span className={`savings ${savings < 0 ? 'negative' : ''}`}>
               {savings >= 0 ? `${savings}% smaller` : `${Math.abs(savings)}% larger`}
             </span>
           )}
           <span>{job.settings.preset[0].toUpperCase() + job.settings.preset.slice(1)}</span>
-          {custom && <span>{job.settings.strategy === 'flatten' ? 'Flattened' : 'Image optimised'}</span>}
+          {custom && <span>{strategyLabel}</span>}
           {custom && <span>{job.settings.dpi} DPI</span>}
           {custom && <span>JPEG {job.settings.jpegQuality}%</span>}
         </div>
@@ -57,8 +63,14 @@ export function JobRow({ job, onDownload, onCancel, onRemove, onRetry }: JobRowP
             <div className="progress-fill" style={{ transform: `scaleX(${job.progress / 100})` }} />
           </div>
         )}
-        {job.status !== 'done' && (
+        {(job.status !== 'done' || job.usedOriginal) && (
           <p className={`job-detail ${job.status === 'error' ? 'error' : ''}`}>{job.message}</p>
+        )}
+        {job.warning && (
+          <p className="job-warning">
+            <Icon name="info" size={14} />
+            <span>{job.warning}</span>
+          </p>
         )}
       </div>
       <div className="job-actions">

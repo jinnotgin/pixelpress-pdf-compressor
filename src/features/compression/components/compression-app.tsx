@@ -37,7 +37,7 @@ export function CompressionApp() {
           <div className="content-width notice-stack">
             {runtime.status === 'loading' && (
               <Notice icon="info">
-                Loading Python and the PDF library. You can choose files once it is ready.
+                Loading Python and the PDF engine. You can choose files once it is ready.
               </Notice>
             )}
             {notice && (

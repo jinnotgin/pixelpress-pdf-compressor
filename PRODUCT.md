@@ -10,7 +10,7 @@ Designers and document-heavy users compressing large, image-rich PDFs in a brows
 
 ## Product Purpose
 
-PixelPress converts oversized PDFs into smaller, searchable PDFs entirely in the browser. Smallest mode flattens page visuals and rebuilds searchable text, Balanced preserves native page structure while recompressing images, and Custom exposes manual resolution and JPEG quality controls. English OCR runs only on pages that lack usable text. Success means meaningfully smaller files without an upload, server dependency, or confusing technical setup.
+PixelPress converts oversized PDFs into smaller, searchable PDFs entirely in the browser. Auto preserves ordinary documents and flattens only clearly vector-heavy pages, Figma aggressively flattens screens and diagrams, and Custom exposes Auto, Preserve, and Flatten strategies alongside resolution and JPEG quality controls. Selectable-language OCR runs only on pages that lack usable text. Signed files remain byte-for-byte unchanged, and non-OCR results fall back to the source whenever compression would make them larger. Success means meaningfully smaller files without an upload, server dependency, or confusing technical setup.
 
 ## Brand Personality
 

@@ -9,11 +9,24 @@ interface RadioGroupProps {
   onChange: (value: string) => void;
   options: RadioOption[];
   columns?: 2 | 3;
+  /** Id of the visible label naming this group. */
+  labelledBy?: string;
 }
 
-export function RadioGroup({ name, value, onChange, options, columns = 2 }: RadioGroupProps) {
+export function RadioGroup({
+  name,
+  value,
+  onChange,
+  options,
+  columns = 2,
+  labelledBy,
+}: RadioGroupProps) {
   return (
-    <div className={`segmented ${columns === 3 ? 'three' : ''}`}>
+    <div
+      className={`segmented ${columns === 3 ? 'three' : ''}`}
+      role="radiogroup"
+      aria-labelledby={labelledBy}
+    >
       {options.map((option) => {
         const id = `${name}-${option.value}`;
         return (

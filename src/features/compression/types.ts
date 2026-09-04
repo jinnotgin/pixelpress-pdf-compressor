@@ -1,5 +1,6 @@
-export type Preset = 'high' | 'balanced' | 'custom';
-export type Strategy = 'flatten' | 'optimize';
+export type Preset = 'auto' | 'figma' | 'custom';
+export type Strategy = 'auto' | 'flatten' | 'optimize';
+export type OcrLanguage = 'eng' | 'chi_sim' | 'chi_tra' | 'msa' | 'tam';
 
 export interface Settings {
   preset: Preset;
@@ -8,13 +9,15 @@ export interface Settings {
   dpi: number;
   /** JPEG quality ceiling, 0-100. */
   jpegQuality: number;
-  /** Run English OCR on pages that have no usable selectable text. */
+  /** Run OCR on pages that have no usable selectable text. */
   recognizeText: boolean;
+  /** Tesseract model used when OCR is needed. */
+  ocrLanguage: OcrLanguage;
 }
 
 /**
  * The concrete settings a job actually runs with. `resolveSettings` turns a
- * preset (`high` / `balanced`) into explicit values; `custom` passes through.
+ * preset (`auto` / `figma`) into explicit values; `custom` passes through.
  */
 export type ResolvedSettings = Settings;
 
@@ -25,6 +28,55 @@ export interface TextSummary {
   rebuiltPages: number;
   ocrPages: number;
   imageOnlyPages: number;
+}
+
+export interface PageAnalysis {
+  usable: boolean;
+  characters: number;
+  words: number;
+  hidden: boolean;
+  imageCoverage: number;
+  contentBytes: number;
+  protected: boolean;
+}
+
+export interface StrategyDebugPage {
+  page: number;
+  decision: 'flatten' | 'optimize';
+  finalAction: 'flatten' | 'optimize' | 'ocr';
+  reason: string;
+  usableText: boolean;
+  characters: number;
+  words: number;
+  largestImageCoveragePercent: number;
+  contentStreamBytes: number;
+  protected: boolean;
+  checks: {
+    imageCoverageBelow55Percent: boolean;
+    contentAtLeast220KB: boolean;
+    fewerThan120Words: boolean;
+    contentAtLeast700KB: boolean;
+  };
+}
+
+export interface StrategyDebugReport {
+  requestedStrategy: Strategy;
+  documentAction: 'analyze-pages' | 'keep-original';
+  documentReason: string;
+  documentFeatures: {
+    signed: boolean;
+    forms: boolean;
+    annotations: boolean;
+    links: boolean;
+    tagged: boolean;
+  };
+  thresholds: {
+    maximumImageCoverage: number;
+    likelyVectorContentBytes: number;
+    likelyVectorMaximumWords: number;
+    definiteVectorContentBytes: number;
+  };
+  pages: StrategyDebugPage[];
 }
 
 export interface Job {
@@ -46,6 +98,8 @@ export interface Job {
   /** In-memory object URL, when the result came back as a transferable buffer. */
   downloadUrl?: string | null;
   completedAt?: number;
+  /** True when no smaller safe result was found and the source bytes were retained. */
+  usedOriginal?: boolean;
 }
 
 export type RuntimeStatus = 'loading' | 'ready' | 'error';
@@ -71,6 +125,7 @@ export type WorkerOutbound =
   | { type: 'runtime'; status: RuntimeStatus; message: string; opfs?: boolean }
   | { type: 'progress'; id: string; progress: number; message: string }
   | { type: 'warning'; id: string; message: string }
+  | { type: 'strategy-debug'; id: string; report: StrategyDebugReport }
   | {
       type: 'done';
       id: string;
@@ -78,6 +133,7 @@ export type WorkerOutbound =
       outputSize: number;
       pages: number;
       textSummary: TextSummary | null;
+      usedOriginal: boolean;
       opfsPath?: string;
       outputBuffer?: ArrayBuffer;
     }

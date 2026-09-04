@@ -11,8 +11,45 @@ def pp_open(job_id, input_path, settings_json):
     settings = json.loads(settings_json)
     source = pymupdf.open(input_path)
     output = pymupdf.open()
-    _PP_JOBS[job_id] = {"source": source, "output": output, "settings": settings}
-    return json.dumps({"pages": len(source)})
+    try:
+        sigflags = source.get_sigflags()
+    except Exception:
+        sigflags = -1
+    try:
+        markinfo = source.markinfo or {}
+        tagged = bool(markinfo.get("Marked"))
+    except Exception:
+        tagged = False
+    try:
+        has_forms = bool(source.is_form_pdf)
+    except Exception:
+        has_forms = False
+    try:
+        has_annotations = bool(source.has_annots())
+    except Exception:
+        has_annotations = False
+    try:
+        has_links = bool(source.has_links())
+    except Exception:
+        has_links = False
+    preserve_structure = has_forms or has_annotations
+    _PP_JOBS[job_id] = {
+        "source": source,
+        "output": output,
+        "settings": settings,
+        "pages": len(source),
+        "preserve_structure": preserve_structure,
+        "rebuilt_pages": set(),
+    }
+    return json.dumps({
+        "pages": len(source),
+        "forceOriginal": sigflags == 3,
+        "preserveStructure": preserve_structure,
+        "hasForms": has_forms,
+        "hasAnnotations": has_annotations,
+        "hasLinks": has_links,
+        "tagged": tagged,
+    })
 
 def _pp_encoded_pixmap(page, dpi, quality, max_pixels=None):
     zoom = float(dpi) / 72.0
@@ -28,7 +65,7 @@ def _pp_encoded_pixmap(page, dpi, quality, max_pixels=None):
     data = pix.tobytes(output="jpeg", jpg_quality=int(quality))
     return data, width, height, zoom * 72.0
 
-def pp_analyze_page(job_id, page_index):
+def pp_analyze_page(job_id, page_index, include_complexity):
     job = _PP_JOBS[job_id]
     page = job["source"].load_page(int(page_index))
     text = page.get_text("text", sort=True) or ""
@@ -49,8 +86,29 @@ def pp_analyze_page(job_id, page_index):
     except Exception:
         pass
 
+    content_bytes = 0
+    if include_complexity:
+        try:
+            content_xrefs = set(page.get_contents() or [])
+            for xobject in page.get_xobjects():
+                if xobject and int(xobject[0]) > 0:
+                    content_xrefs.add(int(xobject[0]))
+            for xref in content_xrefs:
+                stream = job["source"].xref_stream_raw(int(xref))
+                if stream:
+                    content_bytes += len(stream)
+        except Exception:
+            pass
+
+    protected = bool(job.get("preserve_structure"))
+    if not protected:
+        try:
+            protected = bool(page.first_link or page.first_annot or page.first_widget)
+        except Exception:
+            pass
+
     invalid_ratio = replacement / max(meaningful, 1)
-    usable = meaningful >= 3 and invalid_ratio <= 0.12
+    usable = meaningful >= 1 and invalid_ratio <= 0.12
     if usable and image_coverage >= 0.55 and not has_hidden_text and (meaningful < 40 or len(words) < 6):
         usable = False
 
@@ -60,6 +118,8 @@ def pp_analyze_page(job_id, page_index):
         "words": len(words),
         "hidden": has_hidden_text,
         "imageCoverage": round(image_coverage, 3),
+        "contentBytes": content_bytes,
+        "protected": protected,
     })
 
 def pp_copy_original_page(job_id, page_index, final_copy):
@@ -69,7 +129,7 @@ def pp_copy_original_page(job_id, page_index, final_copy):
         job["source"],
         from_page=index,
         to_page=index,
-        links=False,
+        links=True,
         annots=True,
         final=1 if final_copy else 0,
     )
@@ -77,6 +137,8 @@ def pp_copy_original_page(job_id, page_index, final_copy):
 
 def _pp_restore_text_layer(source_page, target_page):
     restored = 0
+    writer = pymupdf.TextWriter(target_page.rect)
+    font = pymupdf.Font("helv")
     for word in source_page.get_text("words", sort=False):
         if len(word) < 5:
             continue
@@ -89,26 +151,24 @@ def _pp_restore_text_layer(source_page, target_page):
         fontsize = max(1.0, rect.height * 0.72)
         baseline = pymupdf.Point(rect.x0, rect.y1 - max(0.5, rect.height * 0.18))
         try:
-            target_page.insert_text(
+            writer.append(
                 baseline,
                 text,
                 fontsize=fontsize,
-                fontname="helv",
-                render_mode=3,
-                overlay=True,
+                font=font,
             )
             restored += 1
         except Exception:
             safe_text = text.encode("latin-1", "replace").decode("latin-1")
-            target_page.insert_text(
+            writer.append(
                 baseline,
                 safe_text,
                 fontsize=fontsize,
-                fontname="helv",
-                render_mode=3,
-                overlay=True,
+                font=font,
             )
             restored += 1
+    if restored:
+        writer.write_text(target_page, render_mode=3, overlay=True)
     return restored
 
 def pp_begin_flatten_page(job_id, page_index):
@@ -119,6 +179,7 @@ def pp_begin_flatten_page(job_id, page_index):
     tiles_x = max(1, math.ceil(page.rect.width * zoom / _PP_TILE_PX))
     tiles_y = max(1, math.ceil(page.rect.height * zoom / _PP_TILE_PX))
     job["flatten"] = {
+        "page_index": int(page_index),
         "page": page,
         "target": job["output"].new_page(width=page.rect.width, height=page.rect.height),
         "zoom": zoom,
@@ -148,9 +209,11 @@ def pp_flatten_tile(job_id, tile_index):
     return True
 
 def pp_finish_flatten_page(job_id, restore_text):
-    state = _PP_JOBS[job_id].pop("flatten")
+    job = _PP_JOBS[job_id]
+    state = job.pop("flatten")
     if restore_text:
         _pp_restore_text_layer(state["page"], state["target"])
+    job["rebuilt_pages"].add(state["page_index"])
     return True
 
 def pp_render_ocr_page(job_id, page_index, target_path):
@@ -167,30 +230,53 @@ def pp_render_ocr_page(job_id, page_index, target_path):
         output.write(data)
     return json.dumps({"width": width, "height": height, "effectiveDpi": round(effective_dpi)})
 
-def pp_append_ocr_pdf(job_id, pdf_path):
+def pp_append_ocr_pdf(job_id, pdf_path, page_index):
     job = _PP_JOBS[job_id]
     with pymupdf.open(pdf_path) as page_pdf:
         job["output"].insert_pdf(page_pdf)
+    job["rebuilt_pages"].add(int(page_index))
     return True
 
-def pp_finalize(job_id, output_path):
+def pp_copy_rebuilt_links(job_id):
+    job = _PP_JOBS[job_id]
+    copied = 0
+    skipped = 0
+    for page_index in sorted(job["rebuilt_pages"]):
+        source_page = job["source"].load_page(page_index)
+        target_page = job["output"].load_page(page_index)
+        for link in source_page.get_links():
+            try:
+                if link.get("kind") == pymupdf.LINK_NAMED:
+                    skipped += 1
+                    continue
+                target_page.insert_link(link)
+                copied += 1
+            except Exception:
+                skipped += 1
+    warning = None
+    if skipped:
+        warning = f"Preserved {copied} links on rebuilt pages; {skipped} unsupported links were skipped."
+    return json.dumps({"copied": copied, "skipped": skipped, "warning": warning})
+
+def pp_finalize(job_id, output_path, rewrite_images):
     job = _PP_JOBS[job_id]
     output = job["output"]
     source = job["source"]
-    settings = job["settings"]
-    warning = None
-    try:
-        metadata = source.metadata
-        if metadata:
-            output.set_metadata(metadata)
-        toc = source.get_toc()
-        if toc:
-            output.set_toc(toc)
-    except Exception:
-        pass
-    try:
-        dpi = int(settings["dpi"])
-        if settings.get("strategy") != "flatten":
+    warnings = []
+    if output is not source:
+        try:
+            metadata = source.metadata
+            if metadata:
+                output.set_metadata(metadata)
+            toc = source.get_toc()
+            if toc:
+                output.set_toc(toc)
+        except Exception:
+            pass
+    if rewrite_images:
+        try:
+            settings = job["settings"]
+            dpi = int(settings["dpi"])
             output.rewrite_images(
                 dpi_threshold=max(dpi + 1, round(dpi * 1.15)),
                 dpi_target=dpi,
@@ -199,18 +285,31 @@ def pp_finalize(job_id, output_path):
                 lossless=True,
                 bitonal=True,
             )
-    except Exception as error:
-        warning = f"Image rewriting was skipped: {error}"
-    output.save(output_path, garbage=4, deflate=True, deflate_images=True, clean=True)
+        except Exception as error:
+            warnings.append(f"Image rewriting was skipped: {error}")
+    output.save(
+        output_path,
+        garbage=4,
+        deflate=True,
+        deflate_images=True,
+        deflate_fonts=True,
+        use_objstms=True,
+        compression_effort=60,
+        clean=False,
+    )
     with pymupdf.open(output_path) as verification:
-        if len(verification) != len(source):
+        if len(verification) != job["pages"]:
             raise RuntimeError("The output page count did not match the source PDF.")
+    warning = " ".join(warnings) if warnings else None
     return json.dumps({"size": os.path.getsize(output_path), "warning": warning})
 
 def pp_close(job_id):
     job = _PP_JOBS.pop(job_id, None)
     if not job:
         return
-    if job.get("output") is not None:
-        job["output"].close()
-    job["source"].close()
+    output = job.get("output")
+    source = job.get("source")
+    if output is not None:
+        output.close()
+    if source is not None and source is not output:
+        source.close()

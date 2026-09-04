@@ -1,7 +1,14 @@
 import { Icon } from '@/components/ui/icon';
 
-import { type Preset, type RuntimeState, type Settings, type Strategy } from '../types';
+import { OCR_LANGUAGE_OPTIONS } from '../config';
 import { type SettingsUpdater } from '../hooks/use-persistent-settings';
+import {
+  type OcrLanguage,
+  type Preset,
+  type RuntimeState,
+  type Settings,
+  type Strategy,
+} from '../types';
 import {
   DEFAULT_SETTINGS,
   PRESET_COPY,
@@ -53,7 +60,7 @@ export function SettingsPanel({
         </div>
         <div className="brand-copy">
           <h1 className="brand-name">PixelPress</h1>
-          <p className="brand-mode">Figma PDF Compressor</p>
+          <p className="brand-mode">Local PDF Compressor</p>
         </div>
         <button
           className="settings-toggle"
@@ -74,86 +81,118 @@ export function SettingsPanel({
           </div>
         </div>
         <form className="settings-form" onSubmit={(event) => event.preventDefault()}>
-          <fieldset className="form-section">
-            <legend className="section-label">Compression</legend>
-            <RadioGroup
-              name="preset"
-              value={settings.preset}
-              onChange={(value) => choosePreset(value as Preset)}
-              columns={3}
-              options={[
-                { value: 'high', label: 'High' },
-                { value: 'balanced', label: 'Balanced' },
-                { value: 'custom', label: 'Custom' },
-              ]}
-            />
+          {/* The preset picker carries no section heading of its own; it reads as a
+              single labelled control, matching Strategy below. */}
+          <section className="form-section">
+            <span className="sub-label" id="preset-label">
+              <span>Compression</span>
+            </span>
+            <div className="strategy-group">
+              <RadioGroup
+                name="preset"
+                labelledBy="preset-label"
+                value={settings.preset}
+                onChange={(value) => choosePreset(value as Preset)}
+                columns={3}
+                options={[
+                  { value: 'auto', label: 'Auto' },
+                  { value: 'figma', label: 'Figma' },
+                  { value: 'custom', label: 'Custom' },
+                ]}
+              />
+            </div>
             <p className="preset-note">{PRESET_COPY[settings.preset]}</p>
-          </fieldset>
+          </section>
           {settings.preset === 'custom' && (
-            <fieldset className="form-section control-stack">
-              <legend className="section-label">Compression Settings</legend>
-              <div>
-                <span className="sub-label">
-                  <span>Strategy</span>
-                </span>
-                <div className="strategy-group">
-                  <RadioGroup
-                    name="strategy"
-                    value={settings.strategy}
-                    onChange={(value) => patch({ strategy: value as Strategy })}
-                    options={[
-                      { value: 'flatten', label: 'Flatten pages' },
-                      { value: 'optimize', label: 'Optimise images' },
-                    ]}
-                  />
+            <section className="form-section" aria-labelledby="compression-settings-label">
+              <h2 className="section-label" id="compression-settings-label">
+                Compression settings
+              </h2>
+              <div className="control-stack">
+                <div>
+                  <span className="sub-label" id="strategy-label">
+                    <span>Strategy</span>
+                  </span>
+                  <div className="strategy-group">
+                    <RadioGroup
+                      name="strategy"
+                      labelledBy="strategy-label"
+                      value={settings.strategy}
+                      onChange={(value) => patch({ strategy: value as Strategy })}
+                      columns={3}
+                      options={[
+                        { value: 'auto', label: 'Auto' },
+                        { value: 'optimize', label: 'Preserve' },
+                        { value: 'flatten', label: 'Flatten' },
+                      ]}
+                    />
+                  </div>
+                  <p className="preset-note">{STRATEGY_COPY[settings.strategy]}</p>
                 </div>
-                <p className="preset-note">{STRATEGY_COPY[settings.strategy]}</p>
+                <RangeControl
+                  id="dpi"
+                  label="Maximum image resolution"
+                  value={settings.dpi}
+                  min={48}
+                  max={300}
+                  unit=" DPI"
+                  hint="Lower = smaller file size"
+                  onChange={(value) => patch({ dpi: value })}
+                />
+                <RangeControl
+                  id="jpeg-quality"
+                  label="JPEG quality"
+                  value={settings.jpegQuality}
+                  min={35}
+                  max={95}
+                  unit="%"
+                  hint="Lower = smaller file size"
+                  onChange={(value) => patch({ jpegQuality: value })}
+                />
               </div>
-              <RangeControl
-                id="dpi"
-                label="Maximum resolution"
-                value={settings.dpi}
-                min={48}
-                max={300}
-                unit=" DPI"
-                hint="Lower = smaller file size"
-                onChange={(value) => patch({ dpi: value })}
-              />
-              <RangeControl
-                id="jpeg-quality"
-                label="JPEG quality"
-                value={settings.jpegQuality}
-                min={35}
-                max={95}
-                unit="%"
-                hint="Lower = smaller file size"
-                onChange={(value) => patch({ jpegQuality: value })}
-              />
-            </fieldset>
+            </section>
           )}
-          <fieldset className="form-section">
-            <legend className="section-label">Searchable text</legend>
-            <label className="check-control">
-              <input
-                type="checkbox"
-                checked={settings.recognizeText}
-                onChange={(event) => patch({ recognizeText: event.target.checked })}
-              />
-              <span className="check-copy">
-                <strong>
-                  Recognise missing text <span className="experimental-tag">English</span>
-                </strong>
-                <span>If a page has no selectable text, read it to make it searchable.</span>
-              </span>
-            </label>
-          </fieldset>
-          <button
-            className="secondary-button full"
-            type="button"
-            onClick={() => setSettings(DEFAULT_SETTINGS)}
-          >
-            Reset to default
-          </button>
+          <section className="form-section" aria-labelledby="searchable-text-label">
+            <h2 className="section-label" id="searchable-text-label">
+              Searchable text
+            </h2>
+            <div className="ocr-controls">
+              <label className="check-control">
+                <input
+                  type="checkbox"
+                  checked={settings.recognizeText}
+                  onChange={(event) => patch({ recognizeText: event.target.checked })}
+                />
+                <span className="check-copy">
+                  <strong>Recognise missing text</strong>
+                  <span>If a page has no selectable text, read it to make it searchable.</span>
+                </span>
+              </label>
+              <label className={`language-control ${settings.recognizeText ? '' : 'disabled-copy'}`}>
+                <span className="sub-label">Recognition language</span>
+                <select
+                  value={settings.ocrLanguage}
+                  disabled={!settings.recognizeText}
+                  onChange={(event) => patch({ ocrLanguage: event.target.value as OcrLanguage })}
+                >
+                  {OCR_LANGUAGE_OPTIONS.map((language) => (
+                    <option key={language.value} value={language.value}>
+                      {language.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          </section>
+          <div className="form-actions">
+            <button
+              className="secondary-button full"
+              type="button"
+              onClick={() => setSettings(DEFAULT_SETTINGS)}
+            >
+              Reset to default
+            </button>
+          </div>
         </form>
       </div>
       <footer className="settings-footer">
