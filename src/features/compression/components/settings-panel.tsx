@@ -1,8 +1,9 @@
 import { Icon } from '@/components/ui/icon';
 
-import { OCR_LANGUAGE_OPTIONS } from '../config';
+import { IMAGE_DETAIL_OPTIONS, OCR_LANGUAGE_OPTIONS } from '../config';
 import { type SettingsUpdater } from '../hooks/use-persistent-settings';
 import {
+  type ImageDetail,
   type OcrLanguage,
   type Preset,
   type RuntimeState,
@@ -11,6 +12,7 @@ import {
 } from '../types';
 import {
   DEFAULT_SETTINGS,
+  IMAGE_DETAIL_COPY,
   PRESET_COPY,
   STRATEGY_COPY,
   resolveSettings,
@@ -25,6 +27,7 @@ interface SettingsPanelProps {
   setOpen: (open: boolean) => void;
   runtime: RuntimeState;
   storageText: string;
+  onOpenStorage: () => void;
 }
 
 export function SettingsPanel({
@@ -34,19 +37,23 @@ export function SettingsPanel({
   setOpen,
   runtime,
   storageText,
+  onOpenStorage,
 }: SettingsPanelProps) {
   const patch = (change: Partial<Settings>) => setSettings((current) => ({ ...current, ...change }));
 
-  // Entering Custom clones whatever the active preset actually runs, so the
-  // sliders open on the values you were just using instead of stale ones.
+  // Entering Custom clones the resolution and quality the active preset
+  // actually runs, so the sliders open on the values you were just using
+  // instead of stale ones. Strategy always starts at Auto, so Custom opens on
+  // the same neutral choice no matter which preset you came from.
   const resolved = resolveSettings(settings);
   const choosePreset = (value: Preset) =>
     patch(
       value === 'custom'
         ? {
             preset: value,
-            strategy: resolved.strategy,
-            dpi: resolved.dpi,
+            strategy: 'auto',
+            flattenDpi: resolved.flattenDpi,
+            imageDetail: resolved.imageDetail,
             jpegQuality: resolved.jpegQuality,
           }
         : { preset: value },
@@ -129,16 +136,36 @@ export function SettingsPanel({
                   </div>
                   <p className="preset-note">{STRATEGY_COPY[settings.strategy]}</p>
                 </div>
-                <RangeControl
-                  id="dpi"
-                  label="Maximum image resolution"
-                  value={settings.dpi}
-                  min={48}
-                  max={300}
-                  unit=" DPI"
-                  hint="Lower = smaller file size"
-                  onChange={(value) => patch({ dpi: value })}
-                />
+                {settings.strategy !== 'optimize' && (
+                  <RangeControl
+                    id="flatten-dpi"
+                    label="Page raster resolution"
+                    value={settings.flattenDpi}
+                    min={48}
+                    max={300}
+                    unit=" DPI"
+                    hint="Flattened pages become images at this resolution. Lower = smaller file size"
+                    onChange={(value) => patch({ flattenDpi: value })}
+                  />
+                )}
+                {settings.strategy !== 'flatten' && (
+                  <div>
+                    <span className="sub-label" id="image-detail-label">
+                      <span>Embedded image detail</span>
+                    </span>
+                    <div className="strategy-group">
+                      <RadioGroup
+                        name="image-detail"
+                        labelledBy="image-detail-label"
+                        value={settings.imageDetail}
+                        onChange={(value) => patch({ imageDetail: value as ImageDetail })}
+                        columns={3}
+                        options={IMAGE_DETAIL_OPTIONS.map(({ value, label }) => ({ value, label }))}
+                      />
+                    </div>
+                    <p className="preset-note">{IMAGE_DETAIL_COPY[settings.imageDetail]}</p>
+                  </div>
+                )}
                 <RangeControl
                   id="jpeg-quality"
                   label="JPEG quality"
@@ -165,7 +192,7 @@ export function SettingsPanel({
                 />
                 <span className="check-copy">
                   <strong>Recognise missing text</strong>
-                  <span>If a page has no selectable text, read it to make it searchable.</span>
+                  <span>If a page has no selectable text, apply text recognition processing to make it searchable.</span>
                 </span>
               </label>
               <label className={`language-control ${settings.recognizeText ? '' : 'disabled-copy'}`}>
@@ -202,7 +229,10 @@ export function SettingsPanel({
             {runtime.message}
           </span>
         </div>
-        <div className="storage-line">{storageText}</div>
+        <button className="storage-line" type="button" onClick={onOpenStorage}>
+          <span>{storageText}</span>
+          <Icon name="chevron" size={14} />
+        </button>
       </footer>
     </aside>
   );

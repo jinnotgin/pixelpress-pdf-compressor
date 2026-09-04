@@ -10,17 +10,40 @@ import { isRemovable } from '../utils/jobs';
 import { DropZone } from './drop-zone';
 import { JobRow } from './job-row';
 import { SettingsPanel } from './settings-panel';
+import { StorageDialog } from './storage-dialog';
 
 export function CompressionApp() {
   const [settings, setSettings] = usePersistentSettings();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [storageOpen, setStorageOpen] = useState(false);
   const [dragging, setDragging] = useState(false);
 
-  const { jobs, runtime, notice, storageText, addFiles, downloadJob, removeJob, cancelJob, retryJob, clearFinished } =
-    useCompressionQueue(settings);
+  const {
+    jobs,
+    runtime,
+    notice,
+    storageText,
+    storage,
+    refreshStorage,
+    clearStorageResults,
+    addFiles,
+    downloadJob,
+    removeJob,
+    cancelJob,
+    retryJob,
+    clearFinished,
+  } = useCompressionQueue(settings);
 
   const isEmpty = jobs.length === 0;
   const clearable = jobs.some((job) => isRemovable(job.status));
+  // Both clear actions delete files the queue is still writing into, so they
+  // stay locked while anything is in flight.
+  const queueBusy = jobs.some((job) => !isRemovable(job.status));
+
+  const openStorage = () => {
+    setStorageOpen(true);
+    void refreshStorage();
+  };
 
   return (
     <div className="app-shell">
@@ -31,6 +54,14 @@ export function CompressionApp() {
         setOpen={setSettingsOpen}
         runtime={runtime}
         storageText={storageText}
+        onOpenStorage={openStorage}
+      />
+      <StorageDialog
+        open={storageOpen}
+        onClose={() => setStorageOpen(false)}
+        usage={storage}
+        busy={queueBusy}
+        onClearResults={clearStorageResults}
       />
       <main className="workspace">
         <div className={`workspace-body ${isEmpty ? 'is-empty' : ''}`}>

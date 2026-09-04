@@ -11,7 +11,9 @@
  * single-file `pixelpress-browser.html`.
  */
 import {
+  IMAGE_DETAIL_TARGETS,
   OCR_LANGUAGE_LABELS,
+  OCR_RENDER_DPI,
   OPFS_CHUNK_SIZE as CHUNK_SIZE,
   PYODIDE_INDEX_URL,
   PYODIDE_MODULE_URL,
@@ -39,6 +41,16 @@ function send(type: string, payload: Record<string, unknown> = {}): void {
 
 function round1(value: number): number {
   return Math.round(value * 10) / 10;
+}
+
+/**
+ * The single scale for the per-page pass. Every page owns an equal slice of
+ * 22-90 whichever branch (OCR, flatten, preserve) handles it, and `fraction` is
+ * how far through that page we are, so the bar never rewinds when the branch
+ * changes from one page to the next.
+ */
+function pageProgress(page: number, pages: number, fraction: number): number {
+  return round1(22 + ((page + fraction) / Math.max(pages, 1)) * 68);
 }
 
 function safeMessage(error: unknown): string {
@@ -260,6 +272,7 @@ function unmountInput(mountPath: string): void {
 
 async function getOCRWorker(
   jobId: string,
+  page: number,
   pages: number,
   language: ResolvedSettings['ocrLanguage'],
 ): Promise<any> {
@@ -267,7 +280,7 @@ async function getOCRWorker(
   const languageLabel = OCR_LANGUAGE_LABELS[language];
   send('progress', {
     id: jobId,
-    progress: 12,
+    progress: pageProgress(page, pages, 0),
     message: `Loading the ${languageLabel} text recognition model for the first time`,
   });
   if (!createOCRWorker) {
@@ -278,15 +291,14 @@ async function getOCRWorker(
       throw new Error('The text recognition module loaded without a createWorker API.');
     }
   }
-  ocrContext = { jobId, page: 0, pages };
   ocrWorker = await createOCRWorker(language, 1, {
     logger(message: any) {
+      // Tesseract keeps logging asynchronously, so a stale context (page already
+      // finished) must not re-send that page's lower percentage.
       if (!ocrContext || message.status !== 'recognizing text') return;
-      const pageFraction =
-        (ocrContext.page + Number(message.progress || 0)) / Math.max(ocrContext.pages, 1);
       send('progress', {
         id: ocrContext.jobId,
-        progress: 16 + Math.round(pageFraction * 76),
+        progress: pageProgress(ocrContext.page, ocrContext.pages, Number(message.progress) || 0),
         message: `Reading text on page ${ocrContext.page + 1} of ${ocrContext.pages}`,
       });
     },
@@ -474,28 +486,37 @@ async function processJob({ id, file, settings }: ProcessRequest): Promise<void>
       const analysis = analyses[page];
       if (needsOcr[page]) {
         const languageLabel = OCR_LANGUAGE_LABELS[settings.ocrLanguage];
-        const recognizer = await getOCRWorker(id, pages, settings.ocrLanguage);
+        const recognizer = await getOCRWorker(id, page, pages, settings.ocrLanguage);
         ocrContext = { jobId: id, page, pages };
         send('progress', {
           id,
-          progress: 14 + Math.round((page / pages) * 76),
+          progress: pageProgress(page, pages, 0),
           message: `No selectable text on page ${page + 1}; reading it in ${languageLabel}`,
         });
+        // Recognition runs at a resolution Tesseract can actually read, not at
+        // the output resolution; `pp_append_ocr_pdf` scales the recognised page
+        // back down, so accuracy here does not inflate the result.
         const imagePath = `/tmp/pixelpress-${id}-ocr-page`;
-        const render = JSON.parse(callPython('pp_render_ocr_page', id, page, imagePath));
+        const render = JSON.parse(
+          callPython('pp_render_ocr_page', id, page, imagePath, OCR_RENDER_DPI),
+        );
         const imageBytes = pyodide.FS.readFile(imagePath);
-        await recognizer.setParameters({ user_defined_dpi: String(render.effectiveDpi) });
+        await recognizer.setParameters({
+          user_defined_dpi: String(Math.round(render.effectiveDpi)),
+        });
         const result = await recognizer.recognize(
           imageBytes,
           { pdfTitle: file.name },
           { pdf: true, text: true },
         );
+        ocrContext = null;
         if (!result.data.pdf) {
           throw new Error('Text recognition did not produce a searchable PDF page.');
         }
         const pagePdfPath = `/tmp/pixelpress-${id}-ocr-page.pdf`;
         pyodide.FS.writeFile(pagePdfPath, new Uint8Array(result.data.pdf));
-        callPython('pp_append_ocr_pdf', id, pagePdfPath, page);
+        const appended = JSON.parse(callPython('pp_append_ocr_pdf', id, pagePdfPath, page));
+        if (appended.warning) send('warning', { id, message: appended.warning });
         textSummary.ocrPages += 1;
         try {
           pyodide.FS.unlink(imagePath);
@@ -510,16 +531,14 @@ async function processJob({ id, file, settings }: ProcessRequest): Promise<void>
       } else if (pageStrategies[page] === 'flatten') {
         // A single huge page can be dozens of tiles, so the bar advances per
         // tile rather than per page — otherwise it sits still for minutes.
-        const pageStart = 22 + (page / pages) * 68;
-        const pageSpan = 68 / pages;
         const label = `Flattening page ${page + 1} of ${pages}`;
-        send('progress', { id, progress: round1(pageStart), message: label });
+        send('progress', { id, progress: pageProgress(page, pages, 0), message: label });
         const flatten = JSON.parse(callPython('pp_begin_flatten_page', id, page));
         for (let tile = 0; tile < flatten.tiles; tile += 1) {
           callPython('pp_flatten_tile', id, tile);
           send('progress', {
             id,
-            progress: round1(pageStart + pageSpan * ((tile + 1) / flatten.tiles)),
+            progress: pageProgress(page, pages, (tile + 1) / flatten.tiles),
             message:
               flatten.tiles > 1 ? `${label} · tile ${tile + 1} of ${flatten.tiles}` : label,
           });
@@ -530,7 +549,7 @@ async function processJob({ id, file, settings }: ProcessRequest): Promise<void>
       } else {
         send('progress', {
           id,
-          progress: round1(22 + ((page + 1) / pages) * 68),
+          progress: pageProgress(page, pages, 1),
           message: `Preserving page ${page + 1} of ${pages}`,
         });
         callPython('pp_copy_original_page', id, page, page === lastOriginalPage);
@@ -550,8 +569,15 @@ async function processJob({ id, file, settings }: ProcessRequest): Promise<void>
           ? 'Optimising flattened PDF'
           : 'Optimising PDF structure and embedded resources',
     });
+    // Only preserved pages carry embedded images worth reworking; a fully
+    // flattened or recognised document has already been re-encoded page by page.
     const finalized = JSON.parse(
-      callPython('pp_finalize', id, outputPath, nativePages.length > 0),
+      callPython(
+        'pp_finalize',
+        id,
+        outputPath,
+        nativePages.length > 0 ? IMAGE_DETAIL_TARGETS[settings.imageDetail] : null,
+      ),
     );
     if (finalized.warning) send('warning', { id, message: finalized.warning });
     await terminateOCR();

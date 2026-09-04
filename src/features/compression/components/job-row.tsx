@@ -1,6 +1,7 @@
 import { Icon } from '@/components/ui/icon';
 import { formatBytes } from '@/utils/format';
 
+import { IMAGE_DETAIL_LABELS } from '../config';
 import { type Job } from '../types';
 import { isRemovable, savingsPercent } from '../utils/jobs';
 
@@ -23,6 +24,16 @@ export function JobRow({ job, onDownload, onCancel, onRemove, onRetry }: JobRowP
     flatten: 'Flatten',
     optimize: 'Preserve',
   }[job.settings.strategy];
+  // Auto runs both branches, so it is the one strategy that has to show both.
+  // The two are not comparable units: pages carry a resolution, embedded images
+  // carry a detail step, so neither can stand in for the other.
+  const imageDetailLabel = IMAGE_DETAIL_LABELS[job.settings.imageDetail];
+  const dpiLabel =
+    job.settings.strategy === 'flatten'
+      ? `${job.settings.flattenDpi} DPI pages`
+      : job.settings.strategy === 'optimize'
+        ? `${imageDetailLabel} images`
+        : `${job.settings.flattenDpi} DPI pages, ${imageDetailLabel} images`;
 
   return (
     <article className="job-row" aria-live="polite">
@@ -55,7 +66,7 @@ export function JobRow({ job, onDownload, onCancel, onRemove, onRetry }: JobRowP
           )}
           <span>{job.settings.preset[0].toUpperCase() + job.settings.preset.slice(1)}</span>
           {custom && <span>{strategyLabel}</span>}
-          {custom && <span>{job.settings.dpi} DPI</span>}
+          {custom && <span>{dpiLabel}</span>}
           {custom && <span>JPEG {job.settings.jpegQuality}%</span>}
         </div>
         {running && (

@@ -6,6 +6,10 @@ import pymupdf
 _PP_JOBS = {}
 _PP_TILE_PX = 3072
 _PP_MAX_OCR_PIXELS = 24_000_000
+# The recognition render is transient input to Tesseract and is re-encoded
+# before it reaches the output, so it is kept close to lossless: compression
+# artefacts cost accuracy here and buy nothing.
+_PP_OCR_JPEG_QUALITY = 92
 
 def pp_open(job_id, input_path, settings_json):
     settings = json.loads(settings_json)
@@ -64,6 +68,22 @@ def _pp_encoded_pixmap(page, dpi, quality, max_pixels=None):
     pix = page.get_pixmap(matrix=matrix, alpha=False)
     data = pix.tobytes(output="jpeg", jpg_quality=int(quality))
     return data, width, height, zoom * 72.0
+
+def _pp_downsample_images(document, dpi, quality):
+    """
+    Shrink embedded rasters towards `dpi`, then recompress them at `quality`.
+    `dpi` is a floor: the pass halves while the result stays above it, so an
+    image it cannot halve is still recompressed. The threshold sits just above
+    the floor so images already at or below it are left alone entirely.
+    """
+    document.rewrite_images(
+        dpi_threshold=max(int(dpi) + 1, round(int(dpi) * 1.15)),
+        dpi_target=int(dpi),
+        quality=int(quality),
+        lossy=True,
+        lossless=True,
+        bitonal=True,
+    )
 
 def pp_analyze_page(job_id, page_index, include_complexity):
     job = _PP_JOBS[job_id]
@@ -175,7 +195,7 @@ def pp_begin_flatten_page(job_id, page_index):
     job = _PP_JOBS[job_id]
     page = job["source"].load_page(int(page_index))
     settings = job["settings"]
-    zoom = int(settings["dpi"]) / 72.0
+    zoom = int(settings["flattenDpi"]) / 72.0
     tiles_x = max(1, math.ceil(page.rect.width * zoom / _PP_TILE_PX))
     tiles_y = max(1, math.ceil(page.rect.height * zoom / _PP_TILE_PX))
     job["flatten"] = {
@@ -216,26 +236,68 @@ def pp_finish_flatten_page(job_id, restore_text):
     job["rebuilt_pages"].add(state["page_index"])
     return True
 
-def pp_render_ocr_page(job_id, page_index, target_path):
+def pp_render_ocr_page(job_id, page_index, target_path, dpi):
+    """
+    Render a page for text recognition. The resolution is passed in rather than
+    read from the job settings: recognition accuracy is not the user's
+    size-versus-quality dial, and this image is discarded once the recognised
+    page has been downsampled back to the page raster resolution.
+    """
     job = _PP_JOBS[job_id]
     page = job["source"].load_page(int(page_index))
-    settings = job["settings"]
     data, width, height, effective_dpi = _pp_encoded_pixmap(
         page,
-        int(settings["dpi"]),
-        int(settings["jpegQuality"]),
+        int(dpi),
+        _PP_OCR_JPEG_QUALITY,
         _PP_MAX_OCR_PIXELS,
     )
     with open(target_path, "wb") as output:
         output.write(data)
-    return json.dumps({"width": width, "height": height, "effectiveDpi": round(effective_dpi)})
+    return json.dumps({"width": width, "height": height, "effectiveDpi": effective_dpi})
 
 def pp_append_ocr_pdf(job_id, pdf_path, page_index):
+    """
+    Tesseract returns the page as its invisible text layer drawn over the image
+    it was given, which is deliberately rendered far above the output
+    resolution. Swapping that image for a fresh render at the page raster
+    resolution is what keeps recognition accuracy from dictating file size,
+    while leaving the text layer — and the fonts Tesseract embedded for it —
+    untouched.
+
+    The replacement is rendered from the source page rather than resampled from
+    Tesseract's copy, so it costs no extra encoding generation, and it lands on
+    the exact resolution asked for: `rewrite_images` can only halve, so it would
+    leave the page at twice the target. It is still the fallback for the case
+    where the recognised page is not shaped the way we expect.
+    """
     job = _PP_JOBS[job_id]
+    settings = job["settings"]
+    dpi = int(settings["flattenDpi"])
+    quality = int(settings["jpegQuality"])
+    warning = None
     with pymupdf.open(pdf_path) as page_pdf:
+        try:
+            target = page_pdf.load_page(0)
+            images = target.get_images(full=True)
+            if images:
+                data, _, _, _ = _pp_encoded_pixmap(
+                    job["source"].load_page(int(page_index)),
+                    dpi,
+                    quality,
+                    _PP_MAX_OCR_PIXELS,
+                )
+                target.replace_image(images[0][0], stream=data)
+        except Exception as error:
+            try:
+                _pp_downsample_images(page_pdf, dpi, quality)
+                warning = None
+            except Exception:
+                warning = (
+                    f"A recognised page kept its full recognition resolution: {error}"
+                )
         job["output"].insert_pdf(page_pdf)
     job["rebuilt_pages"].add(int(page_index))
-    return True
+    return json.dumps({"warning": warning})
 
 def pp_copy_rebuilt_links(job_id):
     job = _PP_JOBS[job_id]
@@ -258,7 +320,7 @@ def pp_copy_rebuilt_links(job_id):
         warning = f"Preserved {copied} links on rebuilt pages; {skipped} unsupported links were skipped."
     return json.dumps({"copied": copied, "skipped": skipped, "warning": warning})
 
-def pp_finalize(job_id, output_path, rewrite_images):
+def pp_finalize(job_id, output_path, image_dpi):
     job = _PP_JOBS[job_id]
     output = job["output"]
     source = job["source"]
@@ -273,18 +335,9 @@ def pp_finalize(job_id, output_path, rewrite_images):
                 output.set_toc(toc)
         except Exception:
             pass
-    if rewrite_images:
+    if image_dpi:
         try:
-            settings = job["settings"]
-            dpi = int(settings["dpi"])
-            output.rewrite_images(
-                dpi_threshold=max(dpi + 1, round(dpi * 1.15)),
-                dpi_target=dpi,
-                quality=int(settings["jpegQuality"]),
-                lossy=True,
-                lossless=True,
-                bitonal=True,
-            )
+            _pp_downsample_images(output, int(image_dpi), int(job["settings"]["jpegQuality"]))
         except Exception as error:
             warnings.append(f"Image rewriting was skipped: {error}")
     output.save(

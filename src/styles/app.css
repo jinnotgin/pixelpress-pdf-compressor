@@ -347,7 +347,9 @@ input[type='range'] {
 }
 
 .settings-footer {
-  padding: 14px 24px 16px;
+  /* The storage button carries its own 4px of bottom padding, so the footer
+     gives back the same amount to keep the optical gap where it was. */
+  padding: 14px 24px 12px;
   border-top: 1px solid var(--border);
   color: var(--ink-faint);
   background: var(--surface);
@@ -380,8 +382,202 @@ input[type='range'] {
   color: var(--ink-soft);
   font-weight: 600;
 }
+.icon-button.quiet {
+  width: 30px;
+  height: 30px;
+  border-color: transparent;
+  background: transparent;
+}
+
+/* The footer readout doubles as the way into the storage dialog, so it reads as
+   a quiet line of text until you point at it. */
 .storage-line {
-  margin-top: 6px;
+  margin-top: 4px;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 6px;
+  margin-left: -6px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink-faint);
+  font-size: inherit;
+  line-height: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color 180ms var(--ease-out),
+    color 180ms var(--ease-out);
+}
+.storage-line:hover {
+  color: var(--ink);
+  background: var(--surface-muted);
+}
+.storage-line svg {
+  flex: 0 0 auto;
+  transform: rotate(-90deg);
+  opacity: 0.7;
+}
+
+.storage-dialog {
+  width: min(440px, calc(100vw - 32px));
+  padding: 22px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 24px 60px oklch(0.235 0.025 275 / 0.18);
+}
+.storage-dialog::backdrop {
+  background: oklch(0.235 0.025 275 / 0.34);
+}
+.storage-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+.storage-head h2 {
+  margin: 0;
+  font-size: 0.98rem;
+  letter-spacing: -0.01em;
+}
+.storage-head p {
+  margin: 5px 0 0;
+  color: var(--ink-soft);
+  font-size: 0.76rem;
+  line-height: 1.5;
+}
+.storage-total {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  margin-top: 20px;
+}
+.storage-total strong {
+  font-size: 1.35rem;
+  letter-spacing: -0.02em;
+}
+.storage-total span {
+  color: var(--ink-soft);
+  font-size: 0.76rem;
+}
+.storage-meter {
+  display: flex;
+  gap: 2px;
+  height: 9px;
+  margin-top: 10px;
+  border-radius: 999px;
+  background: var(--surface-muted);
+  overflow: hidden;
+}
+.storage-meter-part {
+  flex-basis: 0;
+  min-width: 3px;
+  border-radius: 999px;
+}
+.storage-meter-part.is-results,
+.storage-swatch.is-results {
+  background: var(--accent);
+}
+.storage-meter-part.is-models,
+.storage-swatch.is-models {
+  background: oklch(0.66 0.14 200);
+}
+.storage-meter-part.is-engine,
+.storage-swatch.is-engine {
+  background: oklch(0.74 0.11 145);
+}
+.storage-meter-part.is-stray,
+.storage-swatch.is-stray {
+  background: oklch(0.78 0.13 75);
+}
+.storage-meter-part.is-other,
+.storage-swatch.is-other {
+  background: var(--border-strong);
+}
+.storage-breakdown {
+  margin: 18px 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 12px;
+}
+.storage-breakdown li {
+  display: grid;
+  grid-template-columns: 9px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+}
+.storage-swatch {
+  width: 9px;
+  height: 9px;
+  margin-top: 4px;
+  border-radius: 3px;
+}
+.storage-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.storage-copy strong {
+  font-size: 0.79rem;
+}
+.storage-copy span {
+  color: var(--ink-soft);
+  font-size: 0.72rem;
+  line-height: 1.45;
+}
+.storage-size {
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.storage-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 22px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+.storage-hint {
+  flex: 1 0 100%;
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 0.72rem;
+  line-height: 1.5;
+}
+.storage-confirm {
+  flex: 1 0 100%;
+  display: grid;
+  gap: 10px;
+}
+.storage-confirm p {
+  margin: 0;
+  font-size: 0.76rem;
+  line-height: 1.5;
+}
+.storage-confirm-buttons {
+  display: flex;
+  gap: 8px;
+}
+.secondary-button.danger {
+  border-color: var(--danger-bg);
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+.secondary-button.danger:hover {
+  border-color: var(--danger);
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+.secondary-button:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
 }
 
 .workspace {
@@ -685,9 +881,6 @@ input[type='range'] {
 .status-chip.error {
   color: var(--danger);
   background: var(--danger-bg);
-}
-.status-chip.cancelled {
-  color: var(--ink-soft);
 }
 .job-detail {
   margin: 8px 0 0;

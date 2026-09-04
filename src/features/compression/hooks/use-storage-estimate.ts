@@ -2,27 +2,34 @@ import { useCallback, useState } from 'react';
 
 import { formatBytes } from '@/utils/format';
 
+import { readStorageUsage, type StorageUsage } from '../services/storage-usage';
+
 interface StorageEstimateState {
   storageText: string;
-  refresh: () => void;
+  usage: StorageUsage | null;
+  refresh: () => Promise<void>;
 }
 
-/** Reports how much of the browser storage quota the OPFS cache is using. */
+/** Reports how much of the browser storage quota this origin is using. */
 export function useStorageEstimate(): StorageEstimateState {
   const [storageText, setStorageText] = useState('Checking private storage');
+  const [usage, setUsage] = useState<StorageUsage | null>(null);
 
-  const refresh = useCallback(() => {
-    if (!navigator.storage?.estimate) {
-      setStorageText('Private storage unavailable');
-      return;
+  const refresh = useCallback(async () => {
+    try {
+      const next = await readStorageUsage();
+      if (!next) {
+        setUsage(null);
+        setStorageText('Private storage unavailable');
+        return;
+      }
+      setUsage(next);
+      setStorageText(`${formatBytes(next.usage)} used of ${formatBytes(next.quota)} browser storage`);
+    } catch {
+      setUsage(null);
+      setStorageText('Private storage estimate unavailable');
     }
-    navigator.storage
-      .estimate()
-      .then(({ usage, quota }) => {
-        setStorageText(`${formatBytes(usage ?? 0)} used of ${formatBytes(quota ?? 0)} browser storage`);
-      })
-      .catch(() => setStorageText('Private storage estimate unavailable'));
   }, []);
 
-  return { storageText, refresh };
+  return { storageText, usage, refresh };
 }

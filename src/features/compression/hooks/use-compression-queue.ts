@@ -2,6 +2,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { restoreOpfsHistory } from '../services/opfs-history';
 import { readOpfsFile } from '../services/opfs';
+import {
+  clearLocalFiles,
+  deleteStoredJob,
+  type StorageUsage,
+} from '../services/storage-usage';
 import { createPixelpressWorker, postToWorker } from '../services/worker-client';
 import {
   type Job,
@@ -55,9 +60,14 @@ export interface CompressionQueue {
   runtime: RuntimeState;
   notice: Notice | null;
   storageText: string;
+  storage: StorageUsage | null;
+  refreshStorage: () => Promise<void>;
+  /** Deletes every local file kept in OPFS, and drops the results from the queue. */
+  clearStorageResults: () => Promise<void>;
   addFiles: (files: FileList | File[] | null) => void;
   downloadJob: (job: Job) => void;
   removeJob: (id: string) => void;
+  /** Stops a running job and drops it entirely — row and local files alike. */
   cancelJob: (id: string) => void;
   retryJob: (id: string) => void;
   clearFinished: () => void;
@@ -81,7 +91,7 @@ export function useCompressionQueue(settings: Settings): CompressionQueue {
   const objectUrlsRef = useRef<Map<string, string>>(new Map());
   const historyRestoredRef = useRef(false);
 
-  const { storageText, refresh: refreshStorage } = useStorageEstimate();
+  const { storageText, usage: storage, refresh: refreshStorage } = useStorageEstimate();
 
   useEffect(() => {
     jobsRef.current = jobs;
@@ -89,6 +99,19 @@ export function useCompressionQueue(settings: Settings): CompressionQueue {
 
   const updateJob = useCallback((id: string, change: Partial<Job>) => {
     setJobs((current) => current.map((job) => (job.id === id ? { ...job, ...change } : job)));
+  }, []);
+
+  // Progress is a backstop against the worker's phases overlapping: the bar only
+  // ever moves forward, so a phase that reports a lower percentage than the one
+  // before it just holds position instead of visibly rewinding.
+  const advanceJob = useCallback((id: string, progress: number, message: string) => {
+    setJobs((current) =>
+      current.map((job): Job =>
+        job.id === id
+          ? { ...job, status: 'processing', progress: Math.max(job.progress, progress), message }
+          : job,
+      ),
+    );
   }, []);
 
   const startWorker = useCallback(() => {
@@ -109,7 +132,7 @@ export function useCompressionQueue(settings: Settings): CompressionQueue {
           return;
         }
         case 'progress': {
-          updateJob(data.id, { status: 'processing', progress: data.progress, message: data.message });
+          advanceJob(data.id, data.progress, data.message);
           return;
         }
         case 'warning': {
@@ -171,19 +194,19 @@ export function useCompressionQueue(settings: Settings): CompressionQueue {
       activeRef.current = null;
       setRuntime({ status: 'error', message: 'Browser engine stopped', opfs: false });
     };
-  }, [updateJob]);
+  }, [advanceJob, updateJob]);
 
   const restoreHistory = useCallback(async () => {
     const restored = await restoreOpfsHistory();
     if (restored.length) setJobs((current) => [...current, ...restored]);
-    refreshStorage();
+    await refreshStorage();
   }, [refreshStorage]);
 
   // Boot the worker; restore history exactly once even under StrictMode's
   // double-invoke (appending restored jobs is not idempotent).
   useEffect(() => {
     startWorker();
-    refreshStorage();
+    void refreshStorage();
     if (!historyRestoredRef.current) {
       historyRestoredRef.current = true;
       void restoreHistory();
@@ -260,20 +283,30 @@ export function useCompressionQueue(settings: Settings): CompressionQueue {
     setJobs((current) => current.filter((job) => job.id !== id));
   }, []);
 
+  // A cancelled run leaves nothing worth keeping, so the job goes away for good:
+  // the worker mid-write is terminated, the row disappears, and the folder it
+  // was filling is deleted once the terminate has released its file handles.
   const cancelJob = useCallback(
     (id: string) => {
-      if (activeRef.current !== id) return;
-      workerRef.current?.terminate();
-      processingRef.current = false;
-      activeRef.current = null;
-      updateJob(id, {
-        status: 'cancelled',
-        message: 'Cancelled, partial local files can be removed',
-        progress: 0,
-      });
-      startWorker();
+      const active = activeRef.current === id;
+      if (active) {
+        workerRef.current?.terminate();
+        workerRef.current = null;
+        processingRef.current = false;
+        activeRef.current = null;
+      }
+
+      const url = objectUrlsRef.current.get(id);
+      if (url) {
+        URL.revokeObjectURL(url);
+        objectUrlsRef.current.delete(id);
+      }
+      setJobs((current) => current.filter((job) => job.id !== id));
+
+      if (active) startWorker();
+      void deleteStoredJob(id).then(refreshStorage);
     },
-    [startWorker, updateJob],
+    [refreshStorage, startWorker],
   );
 
   const retryJob = useCallback(
@@ -283,6 +316,24 @@ export function useCompressionQueue(settings: Settings): CompressionQueue {
     },
     [startWorker, updateJob],
   );
+
+  // Quota accounting settles a moment after a delete lands, so an estimate taken
+  // straight afterwards can still report the bytes that just went away.
+  const refreshAfterClear = useCallback(async () => {
+    await refreshStorage();
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    await refreshStorage();
+  }, [refreshStorage]);
+
+  // Wipes the whole OPFS tree rather than one folder at a time, so the callers
+  // must keep it out of reach while a job is still writing into it.
+  const clearStorageResults = useCallback(async () => {
+    await clearLocalFiles();
+    objectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+    objectUrlsRef.current.clear();
+    setJobs((current) => current.filter((job) => !isRemovable(job.status)));
+    await refreshAfterClear();
+  }, [refreshAfterClear]);
 
   const clearFinished = useCallback(() => {
     jobsRef.current.filter((job) => isRemovable(job.status)).forEach((job) => {
@@ -299,6 +350,9 @@ export function useCompressionQueue(settings: Settings): CompressionQueue {
     runtime,
     notice,
     storageText,
+    storage,
+    refreshStorage,
+    clearStorageResults,
     addFiles,
     downloadJob,
     removeJob,
