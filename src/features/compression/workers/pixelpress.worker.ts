@@ -567,7 +567,7 @@ async function processJob({ id, file, settings, fallbacks = [] }: ProcessRequest
           send('progress', {
             id,
             progress: pageProgress(page, pages, (tile + 1) / flatten.tiles),
-            message: flatten.tiles > 1 ? `${label} · tile ${tile + 1} of ${flatten.tiles}` : label,
+            message: flatten.tiles > 1 ? `${label} · region ${tile + 1} of ${flatten.tiles}` : label,
           });
         }
         callPython('pp_finish_flatten_page', id, analysis.usable);
