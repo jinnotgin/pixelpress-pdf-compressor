@@ -5,6 +5,7 @@ import { readOpfsFile } from '../services/opfs';
 import { clearLocalFiles, deleteStoredJob, type StorageUsage } from '../services/storage-usage';
 import { createPixelpressWorker, postToWorker } from '../services/worker-client';
 import {
+  type ImageDebugReport,
   type Job,
   type Notice,
   type RuntimeState,
@@ -73,6 +74,16 @@ function logStrategyDebug(report: StrategyDebugReport): void {
     );
   }
   console.groupEnd();
+}
+
+function logImageDebug(report: ImageDebugReport): void {
+  const { planned, rewritten, annotations, unreached } = report;
+  console.info(
+    `[PixelPress images] rewrote ${rewritten} of ${planned} planned ` +
+      `(${annotations} from annotation appearances, ${unreached} drawn without a ` +
+      `replaceable xref — inline images, plus those same appearances)`,
+    report,
+  );
 }
 
 export interface CompressionQueue {
@@ -185,6 +196,10 @@ export function useCompressionQueue(settings: Settings): CompressionQueue {
         }
         case 'strategy-debug': {
           logStrategyDebug(data.report);
+          return;
+        }
+        case 'image-debug': {
+          logImageDebug(data.report);
           return;
         }
         case 'done': {

@@ -1,6 +1,8 @@
 import json
 import math
 import os
+import re
+import zlib
 import pymupdf
 
 _PP_JOBS = {}
@@ -54,92 +56,400 @@ def pp_open(job_id, input_path, settings_json):
         "tagged": tagged,
     })
 
-def _pp_plan_lossless_images(document, dpi):
+# Embedded images are rewritten here rather than by `Document.rewrite_images()`.
+# That call rewrites page content streams to reach every image, which makes it
+# all-or-nothing: one malformed pattern aborts the whole document, it reports no
+# progress and cannot be interrupted, and in the PyMuPDF that Pyodide ships it
+# looks a placement's DPI up by position in a list built during an earlier
+# traversal, which segfaults when the two traversals disagree about shared
+# images (PyMuPDF issue #4918, fixed upstream in 1.28). Replacing image objects
+# by xref instead never touches a content stream, so it sidesteps all of that
+# and reports real progress — at the cost of the two things only a content-stream
+# pass can see, which `_pp_plan_images` counts as `unreached`: inline images and,
+# were it not walked separately below, annotation appearances.
+
+
+def _pp_colorspace_family(document, xref):
+    """The colour model an image declares: `DeviceRGB`, `Indexed`, `DeviceN`..."""
+    kind, text = document.xref_get_key(xref, "ColorSpace")
+    if kind == "xref":
+        text = document.xref_object(int(text.split()[0]))
+    text = text.strip().lstrip("[").strip()
+    return text[1:].split()[0].split("/")[0] if text.startswith("/") else ""
+
+
+def _pp_filter_name(document, xref):
     """
-    Inspect every image placement and return the lossless rasters worth
-    rewriting, each tagged with the lowest DPI it is drawn at. `embedded` counts
-    every placement in the document, which is roughly the work the native lossy
-    pass will do afterwards.
+    The codec an image's bytes are in. A filter array decodes left to right, so
+    the last entry is the image format and the earlier ones only wrap it.
+    """
+    kind, text = document.xref_get_key(xref, "Filter")
+    names = re.findall(r"/([A-Za-z0-9]+)", text) if kind in ("name", "array") else []
+    return names[-1] if names else ""
+
+
+def _pp_int_key(document, xref, key):
+    try:
+        return int(document.xref_get_key(xref, key)[1])
+    except (TypeError, ValueError):
+        return 0
+
+
+def _pp_describe_image(document, xref):
+    """
+    What one image object is, or None when it has to be left alone.
+
+    The exclusions mirror MuPDF's own rewriter: stencil masks and explicitly
+    masked images carry their transparency outside the sample data, and
+    Separation / DeviceN samples only mean anything in their own colour model,
+    so re-encoding any of them into a device space would lose information. A
+    JPEG 2000 image may also carry its alpha inside the codestream, which no
+    format written here can hold on to, so leave those whole as well.
+    """
+    if document.xref_get_key(xref, "ImageMask")[1] == "true":
+        return None
+    if document.xref_get_key(xref, "Mask")[0] != "null":
+        return None
+    if _pp_int_key(document, xref, "SMaskInData") > 0:
+        return None
+    if _pp_colorspace_family(document, xref) in ("Separation", "DeviceN"):
+        return None
+    width = _pp_int_key(document, xref, "Width")
+    height = _pp_int_key(document, xref, "Height")
+    if width <= 0 or height <= 0:
+        return None
+    smask = document.xref_get_key(xref, "SMask")
+    return {
+        "xref": xref,
+        "width": width,
+        "height": height,
+        "smask": int(smask[1].split()[0]) if smask[0] == "xref" else 0,
+        "filter": _pp_filter_name(document, xref),
+        "dpi": math.inf,
+    }
+
+
+def _pp_xobject_references(document, xref):
+    """
+    Every XObject named by one stream's resources.
+
+    The /XObject dictionary may be written inline or held in an object of its
+    own, and both spellings are common, so read whichever is there as source
+    text and pull the indirect references out of it.
+    """
+    kind, text = document.xref_get_key(xref, "Resources/XObject")
+    if kind == "xref":
+        text = document.xref_object(int(text.split()[0]))
+    elif kind != "dict":
+        return []
+    return [int(number) for number in re.findall(r"/[^\s/\[\]<>()]+\s+(\d+)\s+\d+\s+R", text)]
+
+
+def _pp_appearance_images(document, roots, seen):
+    """Image xrefs drawn by an appearance stream, following nested forms."""
+    images = []
+    pending = list(roots)
+    while pending:
+        current = pending.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        for target in _pp_xobject_references(document, current):
+            if document.xref_is_image(target):
+                images.append(target)
+            else:
+                pending.append(target)
+    return images
+
+
+def _pp_annotation_appearances(document, page):
+    """
+    (appearance stream xrefs, rect) for every annotation drawn on `page`.
+
+    Only the normal appearance is displayed, so the down and rollover streams
+    are left alone. /N is a stream for most annotations and a dictionary of
+    named states for the ones that have several, such as checkboxes.
+    """
+    appearances = []
+    seen_annots = set()
+    for annot in list(page.annots()) + list(page.widgets()):
+        if annot.xref in seen_annots:
+            continue
+        seen_annots.add(annot.xref)
+        kind, text = document.xref_get_key(annot.xref, "AP/N")
+        if kind == "xref":
+            roots = [int(text.split()[0])]
+        elif kind == "dict":
+            roots = [int(number) for number in re.findall(r"(\d+)\s+\d+\s+R", text)]
+        else:
+            continue
+        if roots:
+            appearances.append((roots, annot.rect))
+    return appearances
+
+
+def _pp_plan_images(document, dpi):
+    """
+    Inspect every image placement and return the rasters worth rewriting, each
+    tagged with the lowest DPI it is drawn at.
+
+    Replacement happens per object and is therefore global, so a shared image
+    has to keep enough pixels for its largest placement — which is only known
+    once every page has been walked. `unreached` counts images that are drawn
+    but carry no xref to replace: inline images, plus the annotation
+    appearances that are counted separately in `annotations`.
     """
     images = {}
+    rejected = set()
     mask_xrefs = set()
-    embedded = 0
-    # Inspect every placement before replacing anything: replacement is global,
-    # and a shared image must retain enough pixels for its largest placement.
+    annotations = 0
+    unreached = 0
+
+    def note(xref, placement_dpi):
+        """Record one placement, describing the image the first time it is seen.
+
+        A shared image is placed once per page it appears on, so both the
+        description and the decision to exclude it are remembered rather than
+        re-read from the object for every placement.
+        """
+        if xref in rejected:
+            return None
+        info = images.get(xref)
+        if info is None:
+            info = _pp_describe_image(document, xref)
+            if info is None:
+                rejected.add(xref)
+                return None
+            images[xref] = info
+        if placement_dpi is not None:
+            info["dpi"] = min(info["dpi"], placement_dpi)
+        return info
+
     for page in document:
         for image in page.get_images(full=True):
-            embedded += 1
-            xref, smask = image[:2]
-            if smask:
-                mask_xrefs.add(smask)
-            # Newly inserted PNGs may be stored as uncompressed PDF samples.
-            lossless = image[8] in ("", "FlateDecode", "LZWDecode", "RunLengthDecode")
-            if xref <= 0 or not lossless or image[4] == 1:
+            xref, mask = image[:2]
+            # The reported mask is /SMask or /Mask, and neither is ever a
+            # standalone image: both are rewritten with the image that owns them.
+            if mask:
+                mask_xrefs.add(mask)
+            if xref <= 0 or note(xref, None) is None:
                 continue
-            if xref not in images:
-                # Explicit /Mask and stencil masks need different treatment from
-                # /SMask. Preserve those images rather than discard transparency.
-                if document.xref_get_key(xref, "Mask")[0] != "null":
-                    continue
-                if document.xref_get_key(xref, "ImageMask")[1] == "true":
-                    continue
-                images[xref] = {"xref": xref, "page": page.number, "smask": smask,
-                                "dpi": math.inf}
-            info = images[xref]
             for _, transform in page.get_image_rects(xref, transform=True):
                 width = math.hypot(transform.a, transform.b)
                 height = math.hypot(transform.c, transform.d)
                 if width > 0 and height > 0:
-                    info["dpi"] = min(info["dpi"],
-                                      image[2] * 72 / width,
-                                      image[3] * 72 / height)
+                    note(xref, min(image[2] * 72 / width, image[3] * 72 / height))
+
+        # Appearance streams hang off the annotation rather than the page
+        # resources, so `get_images()` never reports what they draw. Their
+        # placement is not known without parsing the appearance itself, so
+        # assume the image fills the annotation: anything smaller is drawn at a
+        # higher DPI than that, which only ever means shrinking it less.
+        seen = set()
+        try:
+            appearances = _pp_annotation_appearances(document, page)
+        except Exception:
+            # A broken annotation is not worth losing the page's images over.
+            appearances = []
+        for roots, rect in appearances:
+            for xref in _pp_appearance_images(document, roots, seen):
+                info = note(xref, None)
+                annotations += 1
+                if info is None or rect.width <= 0 or rect.height <= 0:
+                    continue
+                note(xref, min(info["width"] * 72 / rect.width,
+                               info["height"] * 72 / rect.height))
+
+        try:
+            unreached += sum(1 for placement in page.get_image_info(xrefs=True)
+                             if not placement.get("xref"))
+        except Exception:
+            pass
 
     # A soft mask only surfaces on the page that uses it, so eligibility can
     # only be decided once every page has been walked.
     threshold = max(int(dpi) + 1, round(int(dpi) * 1.15))
     eligible = [
-        info for xref, info in images.items()
+        info for xref, info in sorted(images.items())
         if xref not in mask_xrefs
-        and math.isfinite(info["dpi"])
-        and info["dpi"] >= threshold
+        # A losslessly stored raster is worth re-encoding whatever size it is
+        # drawn at, because becoming a JPEG shrinks it on its own. Anything else
+        # is already lossy, or already fax-compressed, and re-encoding it at the
+        # same quality reliably produces a larger stream that the keep-smaller
+        # guard below would only throw away — so it has to have resolution to
+        # give up before it is worth decoding at all.
+        and (info["filter"] in ("", "FlateDecode", "LZWDecode", "RunLengthDecode")
+             or (math.isfinite(info["dpi"]) and info["dpi"] >= threshold))
     ]
-    return {"images": eligible, "embedded": embedded}
+    return {"images": eligible, "annotations": annotations, "unreached": unreached}
 
 
-def _pp_rewrite_lossless_image(document, info, dpi, quality):
-    """Shrink and recompress one planned raster. False means it was left alone."""
-    xref = info["xref"]
-    effective_dpi = info["dpi"]
-    pix = pymupdf.Pixmap(document, xref)
-    if pix.colorspace is None:
-        return False
-    if info["smask"]:
-        if pix.alpha:
-            pix = pymupdf.Pixmap(pix, 0)
-        mask = pymupdf.Pixmap(document, info["smask"])
-        pix = pymupdf.Pixmap(pix, mask)
-        del mask
+def _pp_shrink_factor(effective_dpi, dpi, width, height):
+    """How many times an image drawn at `effective_dpi` may be halved to reach `dpi`."""
+    if dpi <= 0 or not math.isfinite(effective_dpi) or effective_dpi <= 0:
+        return 0
     factor = 0
-    while effective_dpi / (2 ** (factor + 1)) > dpi:
+    while (effective_dpi / (2 ** (factor + 1)) > dpi
+           and min(width, height) // (2 ** (factor + 1)) >= 1):
         factor += 1
-    if factor:
-        # Shrink color and alpha together to keep mask dimensions aligned.
-        pix.shrink(factor)
-    page = document.load_page(info["page"])
-    if pix.alpha:
-        page.replace_image(xref, pixmap=pix)
-    else:
-        if pix.colorspace.n not in (1, 3):
-            pix = pymupdf.Pixmap(pymupdf.csRGB, pix)
-        page.replace_image(xref, stream=pix.tobytes("jpeg", jpg_quality=int(quality)))
-    del pix
+    return factor
+
+
+def _pp_classify_pixmap(pix):
+    """
+    Colour, gray or bitonal, decided from the samples the way MuPDF decides it.
+
+    A DeviceRGB scan whose pixels all happen to be gray is a gray image, and one
+    that is only ever black or white is bitonal; trusting the declared colour
+    model instead would leave both encoded far larger than they need to be. The
+    round trip through gray is exact for a pixel whose components are equal and
+    inexact for every other pixel, so the digests match only for a gray image.
+    """
+    if pix.colorspace is None:
+        return "gray"
+    gray = pix
+    if pix.colorspace.n != 1:
+        gray = pymupdf.Pixmap(pymupdf.csGRAY, pix)
+        if pymupdf.Pixmap(pix.colorspace, gray).digest != pix.digest:
+            return "color"
+    return "bitonal" if gray.is_monochrome else "gray"
+
+
+def _pp_encode_bitonal(pix):
+    """
+    Halftone to one bit and compress as CCITT Group 4.
+
+    Both polarities are tried because G4 encodes runs of white far more cheaply
+    than runs of black, and a scan that has been inverted somewhere in its life
+    costs several times more the wrong way round. Naming the winner costs the
+    fifteen bytes of a /BlackIs1 entry, so it has to beat the default by more
+    than that to be worth choosing.
+    """
+    if pix.colorspace is None or pix.colorspace.n != 1:
+        pix = pymupdf.Pixmap(pymupdf.csGRAY, pix)
+    fax = pymupdf.mupdf
+    bitmap = fax.fz_new_bitmap_from_pixmap(pix.this, fax.fz_default_halftone(1))
+    normal = fax.fz_buffer_extract(
+        fax.fz_compress_ccitt_fax_g4(bitmap.samples(), bitmap.w(), bitmap.h(), bitmap.stride()))
+    fax.fz_invert_bitmap(bitmap)
+    inverted = fax.fz_buffer_extract(
+        fax.fz_compress_ccitt_fax_g4(bitmap.samples(), bitmap.w(), bitmap.h(), bitmap.stride()))
+    black_is_1 = len(normal) + 15 < len(inverted)
+    return (normal if black_is_1 else inverted), pix, {
+        "Filter": "/CCITTFaxDecode",
+        "DecodeParms": "<</K -1/Columns %d/Rows %d%s>>" % (
+            pix.width, pix.height, "/BlackIs1 true" if black_is_1 else ""),
+        "ColorSpace": "/DeviceGray",
+        "BitsPerComponent": "1",
+    }
+
+
+def _pp_encode_jpeg(pix, quality, gray):
+    """
+    Recompress as JPEG, converting only when the component count has to change.
+
+    An ICC-tagged raster is relabelled with the matching device space rather
+    than converted through its profile: the samples are already what they were,
+    and a conversion would cost a full extra pass over the image to move them.
+    """
+    if gray:
+        if pix.colorspace.n != 1:
+            pix = pymupdf.Pixmap(pymupdf.csGRAY, pix)
+    elif pix.colorspace.n not in (1, 3):
+        pix = pymupdf.Pixmap(pymupdf.csRGB, pix)
+    return pix.tobytes("jpeg", jpg_quality=int(quality)), pix, {
+        "Filter": "/DCTDecode",
+        "DecodeParms": "null",
+        "ColorSpace": "/DeviceGray" if pix.colorspace.n == 1 else "/DeviceRGB",
+        "BitsPerComponent": "8",
+    }
+
+
+def _pp_replace_image_stream(document, xref, data, keys, width, height):
+    """
+    Swap one image object's bytes and the dictionary entries that describe them.
+
+    The stream has to land first: writing it clears /Filter and /DecodeParms,
+    because the bytes it was handed are no longer described by whatever encoded
+    the old ones. Setting the keys beforehand would silently lose them.
+    """
+    document.update_stream(xref, data, new=1, compress=0)
+    document.xref_set_key(xref, "Width", str(width))
+    document.xref_set_key(xref, "Height", str(height))
+    # A /Decode array written for the old samples would remap the new ones.
+    document.xref_set_key(xref, "Decode", "null")
+    for key, value in keys.items():
+        document.xref_set_key(xref, key, value)
+
+
+def _pp_stream_length(document, xref):
+    try:
+        return len(document.xref_stream_raw(xref) or b"")
+    except Exception:
+        return 0
+
+
+def _pp_rewrite_smask(document, xref, factor):
+    """
+    Shrink an image's soft mask by as much as the image itself shrank.
+
+    MuPDF leaves masks alone, which can leave a downsampled photograph carrying
+    a full-resolution alpha channel several times its size. The two are scaled
+    onto the same area regardless of their pixel dimensions, so they only have
+    to shrink together, not match.
+    """
+    mask = pymupdf.Pixmap(document, xref)
+    if mask.alpha:
+        mask = pymupdf.Pixmap(mask, 0)
+    if mask.colorspace is None or mask.colorspace.n != 1:
+        mask = pymupdf.Pixmap(pymupdf.csGRAY, mask)
+    mask.shrink(factor)
+    data = zlib.compress(mask.samples, 6)
+    if len(data) >= _pp_stream_length(document, xref):
+        return False
+    _pp_replace_image_stream(document, xref, data, {
+        "Filter": "/FlateDecode",
+        "DecodeParms": "null",
+        "ColorSpace": "/DeviceGray",
+        "BitsPerComponent": "8",
+    }, mask.width, mask.height)
     return True
 
 
-def _pp_rewrite_lossless_images(document, dpi, quality):
-    """Rewrite lossless rasters once, using their lowest DPI across placements."""
-    for info in _pp_plan_lossless_images(document, dpi)["images"]:
-        _pp_rewrite_lossless_image(document, info, dpi, quality)
+def _pp_rewrite_image(document, info, dpi, quality):
+    """Shrink and recompress one planned raster. False means it was left alone."""
+    xref = info["xref"]
+    original = _pp_stream_length(document, xref)
+    pix = pymupdf.Pixmap(document, xref)
+    if pix.colorspace is None:
+        return False
+    if pix.alpha:
+        # No output format here carries alpha, and the soft mask that holds it
+        # is a separate object rewritten on its own below.
+        pix = pymupdf.Pixmap(pix, 0)
+    # Classify before resampling, as MuPDF does, so a bitonal scan stays on the
+    # fax path and is halftoned back to one bit after it shrinks.
+    kind = _pp_classify_pixmap(pix)
+    factor = _pp_shrink_factor(info["dpi"], dpi, pix.width, pix.height)
+    if factor:
+        pix.shrink(factor)
+    if kind == "bitonal":
+        data, pix, keys = _pp_encode_bitonal(pix)
+    else:
+        data, pix, keys = _pp_encode_jpeg(pix, quality, kind == "gray")
+    # Keep whichever is smaller, even when that means keeping full resolution:
+    # an image that was already tightly packed can only grow from here.
+    if original and len(data) >= original:
+        return False
+    _pp_replace_image_stream(document, xref, data, keys, pix.width, pix.height)
+    if factor and info["smask"]:
+        try:
+            _pp_rewrite_smask(document, info["smask"], factor)
+        except Exception:
+            # The image itself is already smaller; an untouched mask still
+            # describes the same area, so this is not worth failing the page for.
+            pass
+    return True
 
 
 def _pp_downsample_images(document, dpi, quality):
@@ -149,26 +459,9 @@ def _pp_downsample_images(document, dpi, quality):
     image it cannot halve is still recompressed. The threshold sits just above
     the floor so images already at or below it are left alone entirely.
     """
-    # PyMuPDF 1.27 / MuPDF bug 709168 can crash while rewriting shared lossless
-    # images. Replace them individually, including their soft masks, then leave
-    # lossless images out of the native pass. See PyMuPDF issue #4918:
-    # https://github.com/pymupdf/PyMuPDF/issues/4918#issuecomment-3966417965
-    # TODO: Once Pyodide ships PyMuPDF >= 1.28 (with MuPDF >= 1.28), remove
-    # _pp_rewrite_lossless_images and restore the simpler lossless=True call.
-    _pp_rewrite_lossless_images(document, dpi, quality)
-    _pp_rewrite_lossy_images(document, dpi, quality)
+    for info in _pp_plan_images(document, dpi)["images"]:
+        _pp_rewrite_image(document, info, dpi, quality)
 
-
-def _pp_rewrite_lossy_images(document, dpi, quality):
-    """PyMuPDF's own pass over already-lossy rasters. Opaque and uninterruptible."""
-    document.rewrite_images(
-        dpi_threshold=max(int(dpi) + 1, round(int(dpi) * 1.15)),
-        dpi_target=int(dpi),
-        quality=int(quality),
-        lossy=True,
-        lossless=False,
-        bitonal=True,
-    )
 
 def _pp_copy_page_links(source_page, target_page):
     copied = 0
@@ -668,8 +961,8 @@ def _pp_handle_finalize_error(job, error):
 def pp_begin_finalize(job_id, image_dpi):
     """
     Carry the source metadata across and work out how much image rewriting is
-    ahead, without doing any of it. The counts let the caller show real progress
-    over the images it is about to step through, and estimate the opaque stages.
+    ahead, without doing any of it. Every image is then rewritten one at a time,
+    so the counts let the caller show real progress over the whole of it.
     """
     job = _PP_JOBS[job_id]
     output = job["output"]
@@ -688,18 +981,21 @@ def pp_begin_finalize(job_id, image_dpi):
                 output.set_toc(toc)
         except Exception:
             pass
-    embedded = 0
+    annotations = 0
+    unreached = 0
     if job["image_dpi"]:
         try:
-            plan = _pp_plan_lossless_images(output, job["image_dpi"])
+            plan = _pp_plan_images(output, job["image_dpi"])
         except Exception as error:
             _pp_handle_finalize_error(job, error)
         else:
             job["image_plan"] = plan["images"]
-            embedded = plan["embedded"]
+            annotations = plan["annotations"]
+            unreached = plan["unreached"]
     return json.dumps({
         "images": len(job["image_plan"]),
-        "embedded": embedded,
+        "annotations": annotations,
+        "unreached": unreached,
         "pages": job["pages"],
     })
 
@@ -715,7 +1011,7 @@ def pp_optimize_image(job_id, index):
     if index >= len(plan):
         return json.dumps({"stopped": True, "changed": False})
     try:
-        changed = _pp_rewrite_lossless_image(
+        changed = _pp_rewrite_image(
             job["output"],
             plan[index],
             job["image_dpi"],
@@ -725,23 +1021,6 @@ def pp_optimize_image(job_id, index):
         _pp_handle_finalize_error(job, error)
         return json.dumps({"stopped": True, "changed": False})
     return json.dumps({"stopped": False, "changed": bool(changed)})
-
-
-def pp_optimize_images_natively(job_id):
-    """
-    PyMuPDF's own lossy pass over the remaining rasters. A single blocking call
-    with no progress inside it, so the caller estimates its duration instead.
-    """
-    job = _PP_JOBS[job_id]
-    dpi = job.get("image_dpi") or 0
-    if not dpi:
-        return json.dumps({"ran": False})
-    try:
-        _pp_rewrite_lossy_images(job["output"], int(dpi), int(job["settings"]["jpegQuality"]))
-    except Exception as error:
-        _pp_handle_finalize_error(job, error)
-        return json.dumps({"ran": False})
-    return json.dumps({"ran": True})
 
 
 def pp_save_output(job_id, output_path):

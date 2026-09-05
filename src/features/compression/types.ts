@@ -101,6 +101,19 @@ export interface StrategyDebugReport {
   pages: StrategyDebugPage[];
 }
 
+/**
+ * What the image pass found, reported once per job so real inputs can be
+ * measured rather than guessed at. `unreached` counts images that are drawn but
+ * carry no xref to rewrite — inline images, plus the annotation appearances
+ * that `annotations` counts separately and the pass does reach.
+ */
+export interface ImageDebugReport {
+  planned: number;
+  rewritten: number;
+  annotations: number;
+  unreached: number;
+}
+
 export interface Job {
   id: string;
   name: string;
@@ -166,6 +179,7 @@ export type WorkerOutbound =
     }
   | { type: 'warning'; id: string; message: string }
   | { type: 'strategy-debug'; id: string; report: StrategyDebugReport }
+  | { type: 'image-debug'; id: string; report: ImageDebugReport }
   | {
       type: 'done';
       id: string;

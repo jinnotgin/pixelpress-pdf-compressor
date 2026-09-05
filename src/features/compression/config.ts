@@ -93,10 +93,10 @@ export const STAGE_ESTIMATE_MS = {
   preservePage: 30,
   flattenPage: 2500,
   ocrPage: 4000,
-  /** Finalisation. */
+  /** Finalisation. The scan walks every page to find and measure images; the
+   * per-image cost then covers decoding, classifying and re-encoding one. */
+  scanPage: 60,
   imagePerImage: 600,
-  nativeBase: 40,
-  nativePerImage: 100,
   saveBase: 25,
 } as const;
 

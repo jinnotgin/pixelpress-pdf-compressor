@@ -585,12 +585,12 @@ async function processJob({ id, file, settings, fallbacks = [] }: ProcessRequest
         (needsOcr[page] ? ETA.ocrPage : 0),
       0,
     );
-    // Only preserved pages reach the image passes; the rest is writing the file.
+    // Only preserved pages reach the image pass; the rest is writing the file.
+    // The scan that precedes it walks every page, but never runs at all when no
+    // page was preserved, so both terms hang off the same condition.
     const finalizeEta =
       ETA.saveBase +
-      (nativePages.length > 0
-        ? ETA.nativeBase + (ETA.imagePerImage + ETA.nativePerImage) * nativePages.length
-        : 0);
+      (nativePages.length > 0 ? ETA.scanPage * pages + ETA.imagePerImage * nativePages.length : 0);
     const [pagesEnd] = splitBand(PROGRESS.pagesStart, PROGRESS.processingEnd, [
       pagesEta,
       finalizeEta,
@@ -713,20 +713,15 @@ async function processJob({ id, file, settings, fallbacks = [] }: ProcessRequest
     const optimiseLabel = pageStrategies.every((strategy) => strategy === 'flatten')
       ? 'Optimising flattened PDF'
       : 'Optimising PDF structure and embedded resources';
-    // Three of the four stages below disappear into one blocking PyMuPDF call,
-    // so the UI thread animates their bands from an estimate instead. Each
-    // estimate is superseded the moment a real progress message arrives.
+    // The scan and the save are each one blocking PyMuPDF call, so the UI thread
+    // animates their bands from an estimate instead. Each estimate is superseded
+    // the moment a real progress message arrives.
     const estimate = (from: number, to: number, etaMs: number, message: string): void =>
       send('progress-estimate', { id, from, to, etaMs: Math.round(etaMs), message });
     // The scan runs before its own cost can be measured, so it takes a small
     // fixed cut and the stages it sizes divide up what is left.
     const scanEnd = round1(pagesEnd + (PROGRESS.processingEnd - pagesEnd) * FINALIZE_SCAN_SHARE);
-    estimate(
-      pagesEnd,
-      scanEnd,
-      ETA.nativeBase + ETA.preservePage * pages,
-      'Preparing pages for optimisation',
-    );
+    estimate(pagesEnd, scanEnd, ETA.scanPage * pages, 'Preparing pages for optimisation');
     // Only preserved pages carry embedded images worth reworking; a fully
     // flattened document has already been re-encoded page by page. OCR is text-only.
     const imageDpi =
@@ -735,21 +730,12 @@ async function processJob({ id, file, settings, fallbacks = [] }: ProcessRequest
         : null;
     fatalRiskPhase = imageDpi ? 'image-optimization' : null;
     const plan = JSON.parse(callPython('pp_begin_finalize', id, imageDpi));
-    // The planned rasters are rewritten one at a time, so this stretch of the
-    // bar tracks real work rather than an estimate. Everything after it is a
-    // single opaque call into PyMuPDF.
+    // Every raster the plan found is rewritten one at a time, so the whole of
+    // this stretch tracks real work; only the save after it is estimated.
     const plannedImages = Number(plan.images) || 0;
-    // The native pass walks every embedded image, including the ones the plan
-    // already rewrote — it just skips them cheaply once they are small enough.
-    const embedded = Number(plan.embedded) || 0;
     const imagesEta = plannedImages * ETA.imagePerImage;
-    const nativeEta = imageDpi ? ETA.nativeBase + ETA.nativePerImage * embedded : 0;
     const saveEta = ETA.saveBase;
-    const [imagesEnd, nativeEnd] = splitBand(scanEnd, PROGRESS.processingEnd, [
-      imagesEta,
-      nativeEta,
-      saveEta,
-    ]);
+    const [imagesEnd] = splitBand(scanEnd, PROGRESS.processingEnd, [imagesEta, saveEta]);
     send('progress', {
       id,
       progress: scanEnd,
@@ -758,6 +744,7 @@ async function processJob({ id, file, settings, fallbacks = [] }: ProcessRequest
           ? `Optimising ${plannedImages} embedded ${plannedImages === 1 ? 'image' : 'images'}`
           : optimiseLabel,
     });
+    let rewrittenImages = 0;
     for (let image = 0; image < plannedImages; image += 1) {
       send('progress', {
         id,
@@ -766,11 +753,20 @@ async function processJob({ id, file, settings, fallbacks = [] }: ProcessRequest
       });
       // A failure discards the rest of the plan, so stepping further would
       // report images that are no longer going to be touched.
-      if (JSON.parse(callPython('pp_optimize_image', id, image)).stopped) break;
+      const rewritten = JSON.parse(callPython('pp_optimize_image', id, image));
+      if (rewritten.stopped) break;
+      if (rewritten.changed) rewrittenImages += 1;
     }
-    estimate(imagesEnd, nativeEnd, nativeEta, optimiseLabel);
-    callPython('pp_optimize_images_natively', id);
-    estimate(nativeEnd, PROGRESS.processingEnd, saveEta, 'Writing compressed PDF');
+    send('image-debug', {
+      id,
+      report: {
+        planned: plannedImages,
+        rewritten: rewrittenImages,
+        annotations: Number(plan.annotations) || 0,
+        unreached: Number(plan.unreached) || 0,
+      },
+    });
+    estimate(imagesEnd, PROGRESS.processingEnd, saveEta, 'Writing compressed PDF');
     const finalized = JSON.parse(callPython('pp_save_output', id, outputPath));
     fatalRiskPhase = null;
     if (finalized.warning) send('warning', { id, message: finalized.warning });
