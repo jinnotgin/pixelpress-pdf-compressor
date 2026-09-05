@@ -25,27 +25,47 @@ const INITIAL_RUNTIME: RuntimeState = {
 };
 
 function logStrategyDebug(report: StrategyDebugReport): void {
-  console.groupCollapsed('[PixelPress strategy] Auto decision report');
+  const isAuto = report.requestedStrategy === 'auto';
+  const strategyLabel = { auto: 'Auto', optimize: 'Preserve', flatten: 'Flatten' };
+  const { thresholds, pages, ...documentReport } = report;
+  const displayPages = pages.map(({ checks, contentStreamBytes, finalAction, decision, ...page }) => ({
+    ...page,
+    strategy: strategyLabel[decision],
+    ocrPlanned: finalAction === 'ocr',
+    ...(isAuto ? { contentStreamBytes, checks } : {}),
+  }));
+  console.groupCollapsed(
+    `[PixelPress strategy] ${strategyLabel[report.requestedStrategy]} strategy report`,
+  );
   console.info(report.documentReason);
   console.info('Detected PDF features:', report.documentFeatures);
-  console.info('Auto thresholds and copyable report:', report);
+  if (isAuto) console.info('Auto decision thresholds:', thresholds);
+  console.info('Copyable strategy report:', {
+    ...documentReport,
+    ...(isAuto ? { thresholds } : {}),
+    pages: displayPages,
+  });
   if (report.pages.length) {
     console.table(
       report.pages.map((page) => ({
         page: page.page,
-        action: page.finalAction,
-        decision: page.decision,
+        strategy: strategyLabel[page.decision],
+        ocrPlanned: page.finalAction === 'ocr',
         reason: page.reason,
         usableText: page.usableText,
         words: page.words,
         characters: page.characters,
         imageCoverage: `${page.largestImageCoveragePercent}%`,
-        contentBytes: page.contentStreamBytes,
         protected: page.protected,
-        imageBelow55: page.checks.imageCoverageBelow55Percent,
-        contentAtLeast220KB: page.checks.contentAtLeast220KB,
-        wordsBelow120: page.checks.fewerThan120Words,
-        contentAtLeast700KB: page.checks.contentAtLeast700KB,
+        ...(isAuto
+          ? {
+              contentBytes: page.contentStreamBytes,
+              imageBelow55: page.checks.imageCoverageBelow55Percent,
+              contentAtLeast220KB: page.checks.contentAtLeast220KB,
+              wordsBelow120: page.checks.fewerThan120Words,
+              contentAtLeast700KB: page.checks.contentAtLeast700KB,
+            }
+          : {}),
       })),
     );
   }
