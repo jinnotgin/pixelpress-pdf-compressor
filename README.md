@@ -74,14 +74,22 @@ Python lives in `workers/pixelpress.py` and is pulled in as a raw string
 (`import PYTHON_SOURCE from './pixelpress.py?raw'`), so it stays readable and
 lints as real Python.
 
-### Inspecting Auto decisions
+### Inspecting strategy reports
 
 Open the browser developer tools, select **Console**, and filter for
-`PixelPress strategy`. Every compression job logs a collapsed, per-page table
-showing the selected action, reason, text counts, largest-image coverage,
-content-stream size, individual document features, protection status, and each Auto threshold result. The
-report contains structural numbers only—never filenames, extracted text, page
-images, or PDF bytes.
+`PixelPress strategy`. Reports are labeled **Auto**, **Preserve**, or **Flatten**
+to match the requested strategy, including when using the Custom preset.
+Each report includes the document decision, detected PDF features, and a copyable
+report object. When pages are analyzed, a table shows each page's compression
+strategy, reason, text counts, largest-image coverage, and protection status.
+The separate `ocrPlanned` field indicates whether OCR is planned to add searchable
+text; it does not replace the selected compression strategy or confirm OCR success.
+
+Only Auto reports include decision thresholds, per-page threshold checks, and
+content-stream sizes. Manual Preserve and Flatten runs omit these details because
+they do not use Auto selection and do not measure content-stream complexity.
+Documents kept unchanged before page analysis have no per-page table. Reports
+never include filenames, extracted text, page images, or PDF bytes.
 
 ### State ownership
 
