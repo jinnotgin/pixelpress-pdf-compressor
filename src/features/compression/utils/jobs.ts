@@ -19,6 +19,18 @@ export function savingsPercent(job: Pick<Job, 'originalSize' | 'outputSize'>): n
   return Math.round((1 - job.outputSize / job.originalSize) * 100);
 }
 
+export type SizeComparison = 'smaller' | 'same' | 'larger';
+
+/** Compare a completed output with its source; `null` means no result exists yet. */
+export function compareSizes(
+  job: Pick<Job, 'originalSize' | 'outputSize'>,
+): SizeComparison | null {
+  if (job.outputSize == null) return null;
+  if (job.outputSize < job.originalSize) return 'smaller';
+  if (job.outputSize > job.originalSize) return 'larger';
+  return 'same';
+}
+
 export interface FileIntake {
   accepted: Job[];
   rejected: string[];

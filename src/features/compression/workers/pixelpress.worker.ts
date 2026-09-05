@@ -15,6 +15,7 @@ import {
   OCR_LANGUAGE_LABELS,
   OCR_RENDER_DPI,
   OPFS_CHUNK_SIZE as CHUNK_SIZE,
+  ORIGINAL_KEPT_WARNING,
   PYODIDE_INDEX_URL,
   PYODIDE_MODULE_URL,
   TESSERACT_MODULE_URL as TESSERACT_URL,
@@ -23,9 +24,15 @@ import {
   type PageAnalysis,
   type ResolvedSettings,
   type TextSummary,
+  type WorkerFallback,
   type WorkerInbound,
 } from '../types';
 import { AUTO_STRATEGY_THRESHOLDS, explainPageStrategy } from '../utils/strategy';
+import {
+  type FatalRiskPhase,
+  isRuntimeBoundsTrap,
+  recoveryForFatalError,
+} from '../utils/worker-recovery';
 import PYTHON_SOURCE from './pixelpress.py?raw';
 
 declare const self: DedicatedWorkerGlobalScope;
@@ -66,7 +73,9 @@ async function boot(): Promise<void> {
     send('runtime', { status: 'loading', message: 'Loading PDF engine' });
     await pyodide.loadPackage(['pymupdf']);
     await pyodide.runPythonAsync(PYTHON_SOURCE);
-    const opfs = Boolean(self.isSecureContext && navigator.storage && navigator.storage.getDirectory);
+    const opfs = Boolean(
+      self.isSecureContext && navigator.storage && navigator.storage.getDirectory,
+    );
     send('runtime', { status: 'ready', message: opfs ? 'Ready' : 'Ready (M)', opfs });
   } catch (error) {
     send('runtime', { status: 'error', message: safeMessage(error) });
@@ -322,17 +331,33 @@ interface ProcessRequest {
   id: string;
   file: File;
   settings: ResolvedSettings;
+  fallbacks?: WorkerFallback[];
 }
 
-async function processJob({ id, file, settings }: ProcessRequest): Promise<void> {
+async function processJob({ id, file, settings, fallbacks = [] }: ProcessRequest): Promise<void> {
   const opfsAvailable = Boolean(
     self.isSecureContext && navigator.storage && navigator.storage.getDirectory,
   );
   let mounted: { mountPath: string; inputPath: string } | null = null;
   let outputPath = '';
   let staged = false;
+  let fatalRiskPhase: FatalRiskPhase = null;
+  let runtimeTrapped = false;
   try {
     send('progress', { id, progress: 1, message: 'Preparing local workspace' });
+    if (fallbacks.includes('skip-ocr')) {
+      send('warning', {
+        id,
+        message:
+          'The PDF engine could not render a page for text recognition, so this retry continues without adding searchable text.',
+      });
+    } else if (fallbacks.includes('skip-image-optimization')) {
+      send('warning', {
+        id,
+        message:
+          'The PDF engine could not safely rewrite embedded images, so this retry uses structural compression only.',
+      });
+    }
     let readableFile = file;
     if (opfsAvailable) {
       try {
@@ -373,6 +398,7 @@ async function processJob({ id, file, settings }: ProcessRequest): Promise<void>
         settings,
         textSummary: null,
         usedOriginal: true,
+        warning: message,
       };
       await deliverPdfResult({
         jobId: id,
@@ -429,7 +455,9 @@ async function processJob({ id, file, settings }: ProcessRequest): Promise<void>
       explainPageStrategy(settings.strategy, analysis),
     );
     const pageStrategies = pageDecisions.map((decision) => decision.strategy);
-    const needsOcr = analyses.map((analysis) => settings.recognizeText && !analysis.usable);
+    const needsOcr = analyses.map(
+      (analysis) => settings.recognizeText && !fallbacks.includes('skip-ocr') && !analysis.usable,
+    );
     const preserveTaggedAuto =
       settings.strategy === 'auto' &&
       opened.tagged &&
@@ -465,9 +493,7 @@ async function processJob({ id, file, settings }: ProcessRequest): Promise<void>
       },
     });
     if (preserveTaggedAuto) {
-      await deliverOriginal(
-        'This tagged PDF did not contain a page that strongly qualified for flattening, so PixelPress kept its accessibility structure unchanged.',
-      );
+      await deliverOriginal(ORIGINAL_KEPT_WARNING);
       return;
     }
     if (opened.preserveStructure && settings.strategy === 'flatten') {
@@ -497,9 +523,11 @@ async function processJob({ id, file, settings }: ProcessRequest): Promise<void>
         // the output resolution; `pp_append_ocr_pdf` scales the recognised page
         // back down, so accuracy here does not inflate the result.
         const imagePath = `/tmp/pixelpress-${id}-ocr-page`;
+        fatalRiskPhase = 'ocr-render';
         const render = JSON.parse(
           callPython('pp_render_ocr_page', id, page, imagePath, OCR_RENDER_DPI),
         );
+        fatalRiskPhase = null;
         const imageBytes = pyodide.FS.readFile(imagePath);
         await recognizer.setParameters({
           user_defined_dpi: String(Math.round(render.effectiveDpi)),
@@ -539,8 +567,7 @@ async function processJob({ id, file, settings }: ProcessRequest): Promise<void>
           send('progress', {
             id,
             progress: pageProgress(page, pages, (tile + 1) / flatten.tiles),
-            message:
-              flatten.tiles > 1 ? `${label} · tile ${tile + 1} of ${flatten.tiles}` : label,
+            message: flatten.tiles > 1 ? `${label} · tile ${tile + 1} of ${flatten.tiles}` : label,
           });
         }
         callPython('pp_finish_flatten_page', id, analysis.usable);
@@ -564,25 +591,37 @@ async function processJob({ id, file, settings }: ProcessRequest): Promise<void>
     send('progress', {
       id,
       progress: 92,
-      message:
-        pageStrategies.every((strategy) => strategy === 'flatten')
-          ? 'Optimising flattened PDF'
-          : 'Optimising PDF structure and embedded resources',
+      message: pageStrategies.every((strategy) => strategy === 'flatten')
+        ? 'Optimising flattened PDF'
+        : 'Optimising PDF structure and embedded resources',
     });
     // Only preserved pages carry embedded images worth reworking; a fully
     // flattened or recognised document has already been re-encoded page by page.
-    const finalized = JSON.parse(
-      callPython(
-        'pp_finalize',
-        id,
-        outputPath,
-        nativePages.length > 0 ? IMAGE_DETAIL_TARGETS[settings.imageDetail] : null,
-      ),
-    );
+    const imageDpi =
+      nativePages.length > 0 && !fallbacks.includes('skip-image-optimization')
+        ? IMAGE_DETAIL_TARGETS[settings.imageDetail]
+        : null;
+    fatalRiskPhase = imageDpi ? 'image-optimization' : null;
+    const finalized = JSON.parse(callPython('pp_finalize', id, outputPath, imageDpi));
+    fatalRiskPhase = null;
     if (finalized.warning) send('warning', { id, message: finalized.warning });
+    if (Array.isArray(finalized.recoveredPages)) {
+      for (const page of finalized.recoveredPages) {
+        if (
+          Number.isInteger(page) &&
+          page >= 0 &&
+          page < analyses.length &&
+          analyses[page].usable
+        ) {
+          textSummary.nativePages = Math.max(0, textSummary.nativePages - 1);
+          textSummary.rebuiltPages += 1;
+        }
+      }
+    }
     await terminateOCR();
 
     const usedOriginal = finalized.size >= file.size && textSummary.ocrPages === 0;
+    if (usedOriginal) send('warning', { id, message: ORIGINAL_KEPT_WARNING });
     const resultTextSummary = usedOriginal
       ? {
           nativePages: analyses.filter((analysis) => analysis.usable).length,
@@ -603,6 +642,7 @@ async function processJob({ id, file, settings }: ProcessRequest): Promise<void>
       settings,
       textSummary: resultTextSummary,
       usedOriginal,
+      warning: usedOriginal ? ORIGINAL_KEPT_WARNING : undefined,
     };
     await deliverPdfResult({
       jobId: id,
@@ -616,23 +656,30 @@ async function processJob({ id, file, settings }: ProcessRequest): Promise<void>
     });
   } catch (error) {
     await terminateOCR();
+    const fallback = recoveryForFatalError(error, fatalRiskPhase, fallbacks);
+    runtimeTrapped = fatalRiskPhase !== null && isRuntimeBoundsTrap(error);
     send('job-error', {
       id,
       message: safeMessage(error),
       stack: error instanceof Error && error.stack ? error.stack : '',
+      fallback,
     });
   } finally {
-    try {
-      callPython('pp_close', id);
-    } catch {
-      /* ignore */
-    }
-    if (mounted) unmountInput(mounted.mountPath);
-    if (outputPath) {
+    // A WebAssembly bounds trap poisons the Pyodide instance. Do not call into
+    // it again; the queue will replace this worker before applying the fallback.
+    if (!runtimeTrapped) {
       try {
-        pyodide.FS.unlink(outputPath);
+        callPython('pp_close', id);
       } catch {
         /* ignore */
+      }
+      if (mounted) unmountInput(mounted.mountPath);
+      if (outputPath) {
+        try {
+          pyodide.FS.unlink(outputPath);
+        } catch {
+          /* ignore */
+        }
       }
     }
     if (staged) await removeStagedInput(id);

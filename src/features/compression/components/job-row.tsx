@@ -3,7 +3,7 @@ import { formatBytes } from '@/utils/format';
 
 import { IMAGE_DETAIL_LABELS } from '../config';
 import { type Job } from '../types';
-import { isRemovable, savingsPercent } from '../utils/jobs';
+import { compareSizes, isRemovable, savingsPercent } from '../utils/jobs';
 
 interface JobRowProps {
   job: Job;
@@ -15,6 +15,7 @@ interface JobRowProps {
 
 export function JobRow({ job, onDownload, onCancel, onRemove, onRetry }: JobRowProps) {
   const savings = savingsPercent(job);
+  const sizeComparison = compareSizes(job);
   const active = job.status === 'processing';
   const running = active || job.status === 'pending';
   const removable = isRemovable(job.status);
@@ -36,7 +37,7 @@ export function JobRow({ job, onDownload, onCancel, onRemove, onRetry }: JobRowP
         : `${job.settings.flattenDpi} DPI pages, ${imageDetailLabel} images`;
 
   return (
-    <article className="job-row" aria-live="polite">
+    <article className={`job-row ${job.status}`} aria-live="polite">
       <div className="file-glyph">PDF</div>
       <div className="job-main">
         <div className="job-title-line">
@@ -48,18 +49,26 @@ export function JobRow({ job, onDownload, onCancel, onRemove, onRetry }: JobRowP
         <div className="job-metadata">
           <span
             className="size-change"
-            title={job.outputSize != null ? 'Original size, then compressed size' : 'Original size'}
+            title={
+              sizeComparison === 'same'
+                ? 'Output size unchanged'
+                : sizeComparison
+                  ? 'Original size, then compressed size'
+                  : 'Original size'
+            }
           >
             {formatBytes(job.originalSize)}
-            {job.outputSize != null && (
+            {sizeComparison != null && sizeComparison !== 'same' && (
               <>
                 <span className="size-arrow">→</span>
-                <span className="result-size">{formatBytes(job.outputSize)}</span>
+                <span className={`result-size ${sizeComparison}`}>
+                  {formatBytes(job.outputSize)}
+                </span>
               </>
             )}
           </span>
-          {job.usedOriginal && <span className="savings">Already compact</span>}
-          {savings != null && !job.usedOriginal && (
+          {job.usedOriginal && <span className="savings">Original kept</span>}
+          {savings != null && sizeComparison !== 'same' && !job.usedOriginal && (
             <span className={`savings ${savings < 0 ? 'negative' : ''}`}>
               {savings >= 0 ? `${savings}% smaller` : `${Math.abs(savings)}% larger`}
             </span>
@@ -74,7 +83,7 @@ export function JobRow({ job, onDownload, onCancel, onRemove, onRetry }: JobRowP
             <div className="progress-fill" style={{ transform: `scaleX(${job.progress / 100})` }} />
           </div>
         )}
-        {(job.status !== 'done' || job.usedOriginal) && (
+        {job.status !== 'done' && (
           <p className={`job-detail ${job.status === 'error' ? 'error' : ''}`}>{job.message}</p>
         )}
         {job.warning && (
@@ -85,6 +94,17 @@ export function JobRow({ job, onDownload, onCancel, onRemove, onRetry }: JobRowP
         )}
       </div>
       <div className="job-actions">
+        {job.status === 'pending' && (
+          <button
+            className="icon-button quiet job-dismiss"
+            type="button"
+            onClick={() => onCancel(job.id)}
+            aria-label={`Remove ${job.name} from queue`}
+            title="Remove from queue"
+          >
+            <Icon name="close" size={16} />
+          </button>
+        )}
         {job.status === 'done' && (
           <button className="primary-button" type="button" onClick={() => onDownload(job)}>
             <Icon name="download" size={16} />

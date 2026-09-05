@@ -7,6 +7,10 @@ export const MAX_FILE_BYTES = 250 * 1024 * 1024;
 export const HISTORY_MAX_AGE_DAYS = 30;
 export const HISTORY_MAX_AGE_MS = HISTORY_MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
 
+/** Plain-language explanation shown when the source file is the safest result. */
+export const ORIGINAL_KEPT_WARNING =
+  'PixelPress could not safely make this file smaller, so it kept the original.';
+
 /** Streaming chunk size for OPFS / WORKERFS reads and writes. */
 export const OPFS_CHUNK_SIZE = 4 * 1024 * 1024;
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { intakeFiles, savingsPercent } from './jobs';
+import { compareSizes, intakeFiles, savingsPercent } from './jobs';
 import { DEFAULT_SETTINGS } from './settings';
 
 // `new File()` in the test env doesn't preserve an arbitrary `size`, so use a
@@ -18,6 +18,19 @@ describe('savingsPercent', () => {
   it('computes percentage saved and allows negatives', () => {
     expect(savingsPercent({ originalSize: 1000, outputSize: 400 })).toBe(60);
     expect(savingsPercent({ originalSize: 1000, outputSize: 1200 })).toBe(-20);
+  });
+});
+
+describe('compareSizes', () => {
+  it('distinguishes smaller, unchanged, and larger results', () => {
+    expect(compareSizes({ originalSize: 1000, outputSize: 900 })).toBe('smaller');
+    expect(compareSizes({ originalSize: 1000, outputSize: 1000 })).toBe('same');
+    expect(compareSizes({ originalSize: 1000, outputSize: 1100 })).toBe('larger');
+  });
+
+  it('returns null before there is a result', () => {
+    expect(compareSizes({ originalSize: 1000, outputSize: null })).toBeNull();
+    expect(compareSizes({ originalSize: 1000, outputSize: undefined })).toBeNull();
   });
 });
 

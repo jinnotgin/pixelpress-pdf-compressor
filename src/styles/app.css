@@ -936,6 +936,10 @@ input[type='range'] {
   align-items: center;
   gap: 5px;
 }
+.job-dismiss:hover {
+  color: var(--danger);
+  background: var(--danger-bg);
+}
 
 .size-change {
   gap: 5px !important;
@@ -943,8 +947,12 @@ input[type='range'] {
 .size-arrow {
   color: var(--ink-faint);
 }
-.result-size {
+.result-size.smaller {
   color: var(--success);
+  font-weight: 700;
+}
+.result-size.larger {
+  color: var(--danger);
   font-weight: 700;
 }
 .savings.negative {
@@ -1076,6 +1084,12 @@ input[type='range'] {
   .job-actions {
     grid-column: 2;
     justify-content: flex-start;
+  }
+  .job-row.pending {
+    grid-template-columns: 34px minmax(0, 1fr) auto;
+  }
+  .job-row.pending .job-actions {
+    grid-column: auto;
   }
   .drop-zone {
     min-height: 300px;

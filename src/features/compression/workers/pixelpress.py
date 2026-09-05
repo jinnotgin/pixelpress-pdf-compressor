@@ -85,6 +85,123 @@ def _pp_downsample_images(document, dpi, quality):
         bitonal=True,
     )
 
+def _pp_copy_page_links(source_page, target_page):
+    copied = 0
+    skipped = 0
+    for link in source_page.get_links():
+        try:
+            if link.get("kind") == pymupdf.LINK_NAMED:
+                skipped += 1
+                continue
+            target_page.insert_link(link)
+            copied += 1
+        except Exception:
+            skipped += 1
+    return copied, skipped
+
+def _pp_append_printed_page(source_page, target_document, dpi, quality):
+    """Render one malformed page as JPEG tiles and restore selectable text."""
+    zoom = float(dpi) / 72.0
+    tiles_x = max(1, math.ceil(source_page.rect.width * zoom / _PP_TILE_PX))
+    tiles_y = max(1, math.ceil(source_page.rect.height * zoom / _PP_TILE_PX))
+    target_page = target_document.new_page(
+        width=source_page.rect.width,
+        height=source_page.rect.height,
+    )
+    for tile_y in range(tiles_y):
+        for tile_x in range(tiles_x):
+            clip = pymupdf.Rect(
+                tile_x * _PP_TILE_PX / zoom,
+                tile_y * _PP_TILE_PX / zoom,
+                min((tile_x + 1) * _PP_TILE_PX / zoom, source_page.rect.width),
+                min((tile_y + 1) * _PP_TILE_PX / zoom, source_page.rect.height),
+            )
+            if clip.is_empty:
+                continue
+            pix = source_page.get_pixmap(
+                matrix=pymupdf.Matrix(zoom, zoom),
+                clip=clip,
+                alpha=False,
+            )
+            target_page.insert_image(
+                clip,
+                stream=pix.tobytes(output="jpeg", jpg_quality=int(quality)),
+            )
+    try:
+        _pp_restore_text_layer(source_page, target_page)
+    except Exception:
+        # Printing the page is still useful when its original text objects are
+        # malformed too. The visual page remains available in that case.
+        pass
+    return target_page
+
+def _pp_recover_bad_patterns(document, dpi, quality):
+    """
+    Rewrite healthy pages independently and print only pages whose malformed
+    pattern resources make MuPDF's document-wide image pass abort.
+    """
+    recovered = pymupdf.open()
+    printed_pages = []
+    copied_links = 0
+    skipped_links = 0
+    try:
+        for page_index in range(len(document)):
+            candidate = pymupdf.open()
+            try:
+                candidate.insert_pdf(
+                    document,
+                    from_page=page_index,
+                    to_page=page_index,
+                    links=False,
+                    annots=True,
+                    final=1,
+                )
+                try:
+                    _pp_downsample_images(candidate, dpi, quality)
+                except Exception as error:
+                    if "Bad PatternType" not in str(error):
+                        raise
+                    _pp_append_printed_page(
+                        document.load_page(page_index),
+                        recovered,
+                        dpi,
+                        quality,
+                    )
+                    printed_pages.append(page_index + 1)
+                else:
+                    recovered.insert_pdf(
+                        candidate,
+                        links=False,
+                        annots=True,
+                        final=1,
+                    )
+            finally:
+                candidate.close()
+
+        # Links are copied after every page exists so internal destinations keep
+        # their original page numbers even though pages were processed singly.
+        for page_index in range(len(document)):
+            copied, skipped = _pp_copy_page_links(
+                document.load_page(page_index),
+                recovered.load_page(page_index),
+            )
+            copied_links += copied
+            skipped_links += skipped
+
+        try:
+            metadata = document.metadata
+            if metadata:
+                recovered.set_metadata(metadata)
+            toc = document.get_toc()
+            if toc:
+                recovered.set_toc(toc)
+        except Exception:
+            pass
+    except Exception:
+        recovered.close()
+        raise
+    return recovered, printed_pages, copied_links, skipped_links
+
 def pp_analyze_page(job_id, page_index, include_complexity):
     job = _PP_JOBS[job_id]
     page = job["source"].load_page(int(page_index))
@@ -123,7 +240,9 @@ def pp_analyze_page(job_id, page_index, include_complexity):
     protected = bool(job.get("preserve_structure"))
     if not protected:
         try:
-            protected = bool(page.first_link or page.first_annot or page.first_widget)
+            # Supported links are copied back onto rebuilt pages, so links alone
+            # should not force Auto to preserve the page's original structure.
+            protected = bool(page.first_annot or page.first_widget)
         except Exception:
             pass
 
@@ -306,15 +425,9 @@ def pp_copy_rebuilt_links(job_id):
     for page_index in sorted(job["rebuilt_pages"]):
         source_page = job["source"].load_page(page_index)
         target_page = job["output"].load_page(page_index)
-        for link in source_page.get_links():
-            try:
-                if link.get("kind") == pymupdf.LINK_NAMED:
-                    skipped += 1
-                    continue
-                target_page.insert_link(link)
-                copied += 1
-            except Exception:
-                skipped += 1
+        page_copied, page_skipped = _pp_copy_page_links(source_page, target_page)
+        copied += page_copied
+        skipped += page_skipped
     warning = None
     if skipped:
         warning = f"Preserved {copied} links on rebuilt pages; {skipped} unsupported links were skipped."
@@ -325,6 +438,7 @@ def pp_finalize(job_id, output_path, image_dpi):
     output = job["output"]
     source = job["source"]
     warnings = []
+    recovered_pages = []
     if output is not source:
         try:
             metadata = source.metadata
@@ -339,7 +453,40 @@ def pp_finalize(job_id, output_path, image_dpi):
         try:
             _pp_downsample_images(output, int(image_dpi), int(job["settings"]["jpegQuality"]))
         except Exception as error:
-            warnings.append(f"Image rewriting was skipped: {error}")
+            if "Bad PatternType" in str(error):
+                try:
+                    recovered, pages, _, skipped_links = _pp_recover_bad_patterns(
+                        output,
+                        int(image_dpi),
+                        int(job["settings"]["jpegQuality"]),
+                    )
+                    output.close()
+                    output = recovered
+                    job["output"] = output
+                    recovered_pages = [page - 1 for page in pages]
+                    if pages:
+                        page_label = "page" if len(pages) == 1 else "pages"
+                        warnings.append(
+                            f"Recovered an invalid PDF pattern by printing {page_label} "
+                            f"{', '.join(str(page) for page in pages)}; selectable text was "
+                            "restored where possible."
+                        )
+                    else:
+                        warnings.append(
+                            "Recovered an invalid shared PDF pattern by rebuilding and "
+                            "optimising its pages independently."
+                        )
+                    if skipped_links:
+                        warnings.append(
+                            f"{skipped_links} unsupported links on the recovered PDF were skipped."
+                        )
+                except Exception as recovery_error:
+                    warnings.append(
+                        f"Image rewriting was skipped: {error}. "
+                        f"Automatic print recovery also failed: {recovery_error}"
+                    )
+            else:
+                warnings.append(f"Image rewriting was skipped: {error}")
     output.save(
         output_path,
         garbage=4,
@@ -354,7 +501,11 @@ def pp_finalize(job_id, output_path, image_dpi):
         if len(verification) != job["pages"]:
             raise RuntimeError("The output page count did not match the source PDF.")
     warning = " ".join(warnings) if warnings else None
-    return json.dumps({"size": os.path.getsize(output_path), "warning": warning})
+    return json.dumps({
+        "size": os.path.getsize(output_path),
+        "warning": warning,
+        "recoveredPages": recovered_pages,
+    })
 
 def pp_close(job_id):
     job = _PP_JOBS.pop(job_id, None)

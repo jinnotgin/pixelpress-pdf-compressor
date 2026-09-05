@@ -1,4 +1,4 @@
-import { HISTORY_MAX_AGE_MS } from '../config';
+import { HISTORY_MAX_AGE_MS, ORIGINAL_KEPT_WARNING } from '../config';
 import { type Job } from '../types';
 import { DEFAULT_SETTINGS } from '../utils/settings';
 import { formatTextSummary } from '../utils/text-summary';
@@ -14,6 +14,7 @@ interface StoredMetadata {
   settings?: Partial<Job['settings']>;
   textSummary?: Job['textSummary'];
   usedOriginal?: boolean;
+  warning?: string;
 }
 
 /**
@@ -95,6 +96,8 @@ export async function restoreOpfsHistory(): Promise<Job[]> {
         opfsPath: metadata.opfsPath,
         downloadUrl: null,
         usedOriginal: metadata.usedOriginal,
+        warning:
+          metadata.warning ?? (metadata.usedOriginal ? ORIGINAL_KEPT_WARNING : undefined),
       });
     }
   } catch {

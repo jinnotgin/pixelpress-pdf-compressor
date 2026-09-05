@@ -63,7 +63,7 @@ export function SettingsPanel({
     <aside className={`settings-panel ${open ? 'open' : ''}`} aria-label="Compression settings">
       <div className="brand-row">
         <div className="brand-mark">
-          <Icon name="download" size={21} />
+          <Icon name="compress" size={21} />
         </div>
         <div className="brand-copy">
           <h1 className="brand-name">PixelPress</h1>

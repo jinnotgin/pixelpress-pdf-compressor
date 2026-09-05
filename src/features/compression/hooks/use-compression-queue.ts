@@ -2,11 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { restoreOpfsHistory } from '../services/opfs-history';
 import { readOpfsFile } from '../services/opfs';
-import {
-  clearLocalFiles,
-  deleteStoredJob,
-  type StorageUsage,
-} from '../services/storage-usage';
+import { clearLocalFiles, deleteStoredJob, type StorageUsage } from '../services/storage-usage';
 import { createPixelpressWorker, postToWorker } from '../services/worker-client';
 import {
   type Job,
@@ -14,6 +10,7 @@ import {
   type RuntimeState,
   type Settings,
   type StrategyDebugReport,
+  type WorkerFallback,
   type WorkerOutbound,
 } from '../types';
 import { intakeFiles, isRemovable } from '../utils/jobs';
@@ -90,6 +87,7 @@ export function useCompressionQueue(settings: Settings): CompressionQueue {
   const jobsRef = useRef<Job[]>(jobs);
   const objectUrlsRef = useRef<Map<string, string>>(new Map());
   const historyRestoredRef = useRef(false);
+  const restartWorkerRef = useRef<() => void>(() => {});
 
   const { storageText, usage: storage, refresh: refreshStorage } = useStorageEstimate();
 
@@ -127,7 +125,10 @@ export function useCompressionQueue(settings: Settings): CompressionQueue {
         case 'runtime': {
           setRuntime({ status: data.status, message: data.message, opfs: Boolean(data.opfs) });
           if (data.status === 'error') {
-            setNotice({ kind: 'error', text: `The browser engine could not start: ${data.message}` });
+            setNotice({
+              kind: 'error',
+              text: `The browser engine could not start: ${data.message}`,
+            });
           }
           return;
         }
@@ -146,7 +147,9 @@ export function useCompressionQueue(settings: Settings): CompressionQueue {
         case 'done': {
           let downloadUrl: string | null = null;
           if (data.outputBuffer) {
-            downloadUrl = URL.createObjectURL(new Blob([data.outputBuffer], { type: 'application/pdf' }));
+            downloadUrl = URL.createObjectURL(
+              new Blob([data.outputBuffer], { type: 'application/pdf' }),
+            );
             objectUrlsRef.current.set(data.id, downloadUrl);
           }
           updateJob(data.id, {
@@ -165,16 +168,50 @@ export function useCompressionQueue(settings: Settings): CompressionQueue {
           return;
         }
         case 'job-error': {
+          const job = jobsRef.current.find((candidate) => candidate.id === data.id);
+          const fallback = data.fallback;
+          if (fallback && job?.file && !job.workerFallbacks?.includes(fallback)) {
+            const fallbackMessage =
+              fallback === 'skip-ocr'
+                ? 'Restarting safely without text recognition'
+                : 'Restarting safely without embedded-image rewriting';
+            const nextFallbacks: WorkerFallback[] = [...(job.workerFallbacks ?? []), fallback];
+            setJobs((current) =>
+              current.map((candidate) =>
+                candidate.id === data.id
+                  ? {
+                      ...candidate,
+                      status: 'pending',
+                      progress: 0,
+                      message: fallbackMessage,
+                      workerFallbacks: nextFallbacks,
+                    }
+                  : candidate,
+              ),
+            );
+            processingRef.current = false;
+            activeRef.current = null;
+            worker.terminate();
+            if (workerRef.current === worker) workerRef.current = null;
+            setRuntime({
+              status: 'loading',
+              message: 'Restarting browser engine for a safe retry',
+              opfs: false,
+            });
+            queueMicrotask(() => restartWorkerRef.current());
+            return;
+          }
           updateJob(data.id, { status: 'error', message: data.message, progress: 0 });
           processingRef.current = false;
           activeRef.current = null;
           worker.terminate();
           if (workerRef.current === worker) workerRef.current = null;
           setRuntime({
-            status: 'error',
-            message: 'Browser engine will restart before retrying',
+            status: 'loading',
+            message: 'Restarting browser engine',
             opfs: false,
           });
+          queueMicrotask(() => restartWorkerRef.current());
           return;
         }
       }
@@ -195,6 +232,8 @@ export function useCompressionQueue(settings: Settings): CompressionQueue {
       setRuntime({ status: 'error', message: 'Browser engine stopped', opfs: false });
     };
   }, [advanceJob, updateJob]);
+
+  restartWorkerRef.current = startWorker;
 
   const restoreHistory = useCallback(async () => {
     const restored = await restoreOpfsHistory();
@@ -227,12 +266,17 @@ export function useCompressionQueue(settings: Settings): CompressionQueue {
 
     processingRef.current = true;
     activeRef.current = next.id;
-    updateJob(next.id, { status: 'processing', progress: 1, message: 'Sending file to the local worker' });
+    updateJob(next.id, {
+      status: 'processing',
+      progress: 1,
+      message: 'Sending file to the local worker',
+    });
     postToWorker(workerRef.current, {
       type: 'process',
       id: next.id,
       file: next.file,
       settings: next.settings,
+      fallbacks: next.workerFallbacks,
     });
   }, [jobs, runtime.status, updateJob]);
 
@@ -311,10 +355,14 @@ export function useCompressionQueue(settings: Settings): CompressionQueue {
 
   const retryJob = useCallback(
     (id: string) => {
-      updateJob(id, { status: 'pending', message: 'Waiting to retry', progress: 0 });
-      startWorker();
+      updateJob(id, {
+        status: 'pending',
+        message: runtime.status === 'ready' ? 'Waiting to retry' : 'Waiting for the browser engine',
+        progress: 0,
+      });
+      if (runtime.status === 'error' || !workerRef.current) startWorker();
     },
-    [startWorker, updateJob],
+    [runtime.status, startWorker, updateJob],
   );
 
   // Quota accounting settles a moment after a delete lands, so an estimate taken
@@ -336,11 +384,13 @@ export function useCompressionQueue(settings: Settings): CompressionQueue {
   }, [refreshAfterClear]);
 
   const clearFinished = useCallback(() => {
-    jobsRef.current.filter((job) => isRemovable(job.status)).forEach((job) => {
-      const url = objectUrlsRef.current.get(job.id);
-      if (url) URL.revokeObjectURL(url);
-      if (workerRef.current) postToWorker(workerRef.current, { type: 'remove', id: job.id });
-    });
+    jobsRef.current
+      .filter((job) => isRemovable(job.status))
+      .forEach((job) => {
+        const url = objectUrlsRef.current.get(job.id);
+        if (url) URL.revokeObjectURL(url);
+        if (workerRef.current) postToWorker(workerRef.current, { type: 'remove', id: job.id });
+      });
     setJobs((current) => current.filter((job) => !isRemovable(job.status)));
     objectUrlsRef.current.clear();
   }, []);

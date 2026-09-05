@@ -112,7 +112,7 @@ export function StorageDialog({
       <div className="storage-head">
         <div>
           <h2 id="storage-dialog-title">Browser storage</h2>
-          <p>Everything PixelPress keeps stays on this device. Nothing here has been uploaded.</p>
+          <p>PixelPress stores everything on this device. Nothing is uploaded to the cloud.</p>
         </div>
         <button className="icon-button quiet" type="button" onClick={onClose} aria-label="Close">
           <Icon name="close" size={16} />

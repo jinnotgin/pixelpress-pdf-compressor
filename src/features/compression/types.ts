@@ -1,6 +1,7 @@
 export type Preset = 'auto' | 'figma' | 'custom';
 export type Strategy = 'auto' | 'flatten' | 'optimize';
 export type OcrLanguage = 'eng' | 'chi_sim' | 'chi_tra' | 'msa' | 'tam';
+export type WorkerFallback = 'skip-ocr' | 'skip-image-optimization';
 /**
  * How much detail to keep in images embedded inside preserved pages. Steps
  * rather than a resolution, because the underlying pass can only halve, and
@@ -121,6 +122,8 @@ export interface Job {
   completedAt?: number;
   /** True when no smaller safe result was found and the source bytes were retained. */
   usedOriginal?: boolean;
+  /** One-time safety fallbacks already applied after a fatal PDF-engine trap. */
+  workerFallbacks?: WorkerFallback[];
 }
 
 export type RuntimeStatus = 'loading' | 'ready' | 'error';
@@ -139,7 +142,13 @@ export interface Notice {
 /* --- Worker message protocol ------------------------------------------------ */
 
 export type WorkerInbound =
-  | { type: 'process'; id: string; file: File; settings: ResolvedSettings }
+  | {
+      type: 'process';
+      id: string;
+      file: File;
+      settings: ResolvedSettings;
+      fallbacks?: WorkerFallback[];
+    }
   | { type: 'remove'; id: string };
 
 export type WorkerOutbound =
@@ -158,4 +167,10 @@ export type WorkerOutbound =
       opfsPath?: string;
       outputBuffer?: ArrayBuffer;
     }
-  | { type: 'job-error'; id: string; message: string; stack?: string };
+  | {
+      type: 'job-error';
+      id: string;
+      message: string;
+      stack?: string;
+      fallback?: WorkerFallback;
+    };

@@ -16,7 +16,7 @@ describe('resolveSettings', () => {
       strategy: 'auto',
       flattenDpi: 96,
       imageDetail: 'screen',
-      jpegQuality: 78,
+      jpegQuality: 85,
     });
   });
 

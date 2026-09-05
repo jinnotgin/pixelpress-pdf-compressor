@@ -75,7 +75,7 @@ export function resolveSettings(settings: Settings): ResolvedSettings {
       // far less, so it can afford to keep more detail.
       flattenDpi: 96,
       imageDetail: 'screen',
-      jpegQuality: 78,
+      jpegQuality: 85,
       recognizeText: settings.recognizeText,
       ocrLanguage: settings.ocrLanguage,
     };
