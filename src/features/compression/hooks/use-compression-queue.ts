@@ -14,6 +14,7 @@ import {
   type WorkerOutbound,
 } from '../types';
 import { intakeFiles, isRemovable } from '../utils/jobs';
+import { startProgressRamp, type ProgressRamp } from '../utils/progress-estimate';
 import { resolveSettings } from '../utils/settings';
 import { formatTextSummary } from '../utils/text-summary';
 import { useStorageEstimate } from './use-storage-estimate';
@@ -28,12 +29,14 @@ function logStrategyDebug(report: StrategyDebugReport): void {
   const isAuto = report.requestedStrategy === 'auto';
   const strategyLabel = { auto: 'Auto', optimize: 'Preserve', flatten: 'Flatten' };
   const { thresholds, pages, ...documentReport } = report;
-  const displayPages = pages.map(({ checks, contentStreamBytes, finalAction, decision, ...page }) => ({
-    ...page,
-    strategy: strategyLabel[decision],
-    ocrPlanned: finalAction === 'ocr',
-    ...(isAuto ? { contentStreamBytes, checks } : {}),
-  }));
+  const displayPages = pages.map(
+    ({ checks, contentStreamBytes, finalAction, decision, ...page }) => ({
+      ...page,
+      strategy: strategyLabel[decision],
+      ocrPlanned: finalAction === 'ocr',
+      ...(isAuto ? { contentStreamBytes, checks } : {}),
+    }),
+  );
   console.groupCollapsed(
     `[PixelPress strategy] ${strategyLabel[report.requestedStrategy]} strategy report`,
   );
@@ -108,6 +111,8 @@ export function useCompressionQueue(settings: Settings): CompressionQueue {
   const objectUrlsRef = useRef<Map<string, string>>(new Map());
   const historyRestoredRef = useRef(false);
   const restartWorkerRef = useRef<() => void>(() => {});
+  // At most one stage is ever being estimated, because the worker blocks on it.
+  const rampRef = useRef<ProgressRamp | null>(null);
 
   const { storageText, usage: storage, refresh: refreshStorage } = useStorageEstimate();
 
@@ -132,7 +137,13 @@ export function useCompressionQueue(settings: Settings): CompressionQueue {
     );
   }, []);
 
+  const stopRamp = useCallback(() => {
+    rampRef.current?.stop();
+    rampRef.current = null;
+  }, []);
+
   const startWorker = useCallback(() => {
+    stopRamp();
     workerRef.current?.terminate();
     setRuntime(INITIAL_RUNTIME);
 
@@ -153,7 +164,19 @@ export function useCompressionQueue(settings: Settings): CompressionQueue {
           return;
         }
         case 'progress': {
+          // Real news always wins: whatever was being estimated has finished.
+          stopRamp();
           advanceJob(data.id, data.progress, data.message);
+          return;
+        }
+        case 'progress-estimate': {
+          stopRamp();
+          rampRef.current = startProgressRamp({
+            from: data.from,
+            to: data.to,
+            etaMs: data.etaMs,
+            onProgress: (progress) => advanceJob(data.id, progress, data.message),
+          });
           return;
         }
         case 'warning': {
@@ -165,6 +188,7 @@ export function useCompressionQueue(settings: Settings): CompressionQueue {
           return;
         }
         case 'done': {
+          stopRamp();
           let downloadUrl: string | null = null;
           if (data.outputBuffer) {
             downloadUrl = URL.createObjectURL(
@@ -188,6 +212,7 @@ export function useCompressionQueue(settings: Settings): CompressionQueue {
           return;
         }
         case 'job-error': {
+          stopRamp();
           const job = jobsRef.current.find((candidate) => candidate.id === data.id);
           const fallback = data.fallback;
           if (fallback && job?.file && !job.workerFallbacks?.includes(fallback)) {
@@ -239,6 +264,7 @@ export function useCompressionQueue(settings: Settings): CompressionQueue {
 
     worker.onerror = (event) => {
       console.error('PixelPress worker error', event.message, event.filename, event.lineno);
+      stopRamp();
       const id = activeRef.current;
       if (id) {
         updateJob(id, {
@@ -251,7 +277,7 @@ export function useCompressionQueue(settings: Settings): CompressionQueue {
       activeRef.current = null;
       setRuntime({ status: 'error', message: 'Browser engine stopped', opfs: false });
     };
-  }, [advanceJob, updateJob]);
+  }, [advanceJob, updateJob, stopRamp]);
 
   restartWorkerRef.current = startWorker;
 
@@ -273,6 +299,7 @@ export function useCompressionQueue(settings: Settings): CompressionQueue {
 
     const urls = objectUrlsRef.current;
     return () => {
+      rampRef.current?.stop();
       workerRef.current?.terminate();
       urls.forEach((url) => URL.revokeObjectURL(url));
     };

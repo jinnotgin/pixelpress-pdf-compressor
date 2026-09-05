@@ -70,6 +70,40 @@ export const OCR_LANGUAGE_LABELS = Object.fromEntries(
   OCR_LANGUAGE_OPTIONS.map(({ value, label }) => [value, label]),
 ) as Record<OcrLanguage, string>;
 
+/**
+ * Rough per-unit durations, in milliseconds, used only to decide how wide each
+ * stage's slice of the progress bar should be — and, for the stages that report
+ * nothing while they run, how fast to animate it.
+ *
+ * They exist because the stages differ by orders of magnitude depending on the
+ * strategy: flattening a page is expensive and preserving one is nearly free,
+ * while `save()` writes to Pyodide's in-memory filesystem and costs almost
+ * nothing regardless of document size (the expensive write is the OPFS copy
+ * afterwards, which reports real progress of its own). Splitting the bar evenly
+ * would leave whole stretches dead for one strategy and cramped for another.
+ *
+ * Measured in-browser against mixed, photographic and vector-heavy PDFs. They
+ * only need the right order of magnitude: every band they size is either backed
+ * by real progress or animated by an asymptotic ramp, so an estimate that is
+ * too low stalls just short of the next stage and one that is too high arrives
+ * at it early. Nothing about the output depends on them.
+ */
+export const STAGE_ESTIMATE_MS = {
+  /** Per-page pass, by branch. Flattening rasterises; preserving copies. */
+  preservePage: 30,
+  flattenPage: 2500,
+  ocrPage: 4000,
+  /** Finalisation. */
+  imagePerImage: 600,
+  nativeBase: 40,
+  nativePerImage: 100,
+  saveBase: 25,
+} as const;
+
+/** Share of the finalisation band given to the image scan, which runs before
+ * its own cost can be known. It is milliseconds of work, so it stays small. */
+export const FINALIZE_SCAN_SHARE = 0.15;
+
 /** localStorage key for the persisted settings form. */
 export const SETTINGS_STORAGE_KEY = 'pixelpress-browser-settings';
 

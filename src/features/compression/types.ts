@@ -154,6 +154,16 @@ export type WorkerInbound =
 export type WorkerOutbound =
   | { type: 'runtime'; status: RuntimeStatus; message: string; opfs?: boolean }
   | { type: 'progress'; id: string; progress: number; message: string }
+  | {
+      // A stage the worker cannot report from within: the UI thread animates
+      // `from` towards `to` over `etaMs` until the next real message arrives.
+      type: 'progress-estimate';
+      id: string;
+      from: number;
+      to: number;
+      etaMs: number;
+      message: string;
+    }
   | { type: 'warning'; id: string; message: string }
   | { type: 'strategy-debug'; id: string; report: StrategyDebugReport }
   | {

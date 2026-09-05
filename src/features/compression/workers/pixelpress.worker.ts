@@ -11,6 +11,7 @@
  * single-file `pixelpress-browser.html`.
  */
 import {
+  FINALIZE_SCAN_SHARE,
   IMAGE_DETAIL_TARGETS,
   OCR_LANGUAGE_LABELS,
   OCR_RENDER_DPI,
@@ -18,6 +19,7 @@ import {
   ORIGINAL_KEPT_WARNING,
   PYODIDE_INDEX_URL,
   PYODIDE_MODULE_URL,
+  STAGE_ESTIMATE_MS as ETA,
   TESSERACT_MODULE_URL as TESSERACT_URL,
 } from '../config';
 import {
@@ -33,6 +35,7 @@ import {
   isRuntimeBoundsTrap,
   recoveryForFatalError,
 } from '../utils/worker-recovery';
+import { splitBand } from '../utils/progress-estimate';
 import PYTHON_SOURCE from './pixelpress.py?raw';
 
 declare const self: DedicatedWorkerGlobalScope;
@@ -40,8 +43,15 @@ declare const self: DedicatedWorkerGlobalScope;
 let pyodide: any = null;
 let ocrWorker: any = null;
 let createOCRWorker: ((...args: any[]) => any) | null = null;
-let ocrContext: { jobId: string; page: number; pages: number; tile: number; tiles: number } | null =
-  null;
+let ocrContext: {
+  jobId: string;
+  page: number;
+  pages: number;
+  tile: number;
+  tiles: number;
+  share: number;
+  pagesEnd: number;
+} | null = null;
 
 function send(type: string, payload: Record<string, unknown> = {}): void {
   self.postMessage({ type, ...payload });
@@ -52,13 +62,49 @@ function round1(value: number): number {
 }
 
 /**
- * The single scale for the per-page pass. Every page owns an equal slice of
- * 22-90 whichever branch (OCR, flatten, preserve) handles it, and `fraction` is
- * how far through that page we are, so the bar never rewinds when the branch
- * changes from one page to the next.
+ * The fixed boundaries of the bar. Everything up to `pagesStart` costs roughly
+ * the same whatever the job is doing, so those bands are constants; the split
+ * of `pagesStart`-`processingEnd` between the per-page pass and finalisation
+ * depends entirely on the strategy and is worked out per job by `splitBand`.
  */
-function pageProgress(page: number, pages: number, fraction: number): number {
-  return round1(22 + ((page + fraction) / Math.max(pages, 1)) * 68);
+const PROGRESS = {
+  stageStart: 1,
+  stageEnd: 4,
+  analysisStart: 4,
+  analysisEnd: 8,
+  /** Where the per-page pass begins. Where it ends depends on the job. */
+  pagesStart: 8,
+  /** Where processing ends and the result is written out. */
+  processingEnd: 96,
+  outputStart: 96,
+  outputEnd: 99,
+} as const;
+
+/**
+ * How much of a page's slice is spent before OCR starts on it, per branch.
+ *
+ * The two branches are nothing alike in cost. Preserving copies the page into
+ * the output and returns almost immediately, so giving it a large share makes
+ * the bar leap forward before recognition has read a single region. Flattening
+ * renders every tile at the requested DPI, which is real work worth showing.
+ * OCR takes whatever is left either way.
+ */
+const SHARE_BEFORE_OCR = {
+  preserve: 0.08,
+  flatten: 0.5,
+} as const;
+
+/**
+ * The single scale for the per-page pass. Every page owns an equal slice of the
+ * pages band whichever branch (OCR, flatten, preserve) handles it, and
+ * `fraction` is how far through that page we are, so the bar never rewinds when
+ * the branch changes from one page to the next. `end` is where the band stops,
+ * which the job works out from its own mix of pages.
+ */
+function pageProgress(page: number, pages: number, fraction: number, end: number): number {
+  return round1(
+    PROGRESS.pagesStart + ((page + fraction) / Math.max(pages, 1)) * (end - PROGRESS.pagesStart),
+  );
 }
 
 function safeMessage(error: unknown): string {
@@ -140,7 +186,9 @@ async function stageInput(jobId: string, file: File): Promise<File> {
       offset = end;
       send('progress', {
         id: jobId,
-        progress: Math.max(1, Math.round((offset / Math.max(file.size, 1)) * 8)),
+        progress:
+          PROGRESS.stageStart +
+          Math.round((offset / Math.max(file.size, 1)) * (PROGRESS.stageEnd - PROGRESS.stageStart)),
         message: 'Staging file in private browser storage',
       });
     }
@@ -156,6 +204,7 @@ async function persistMemFile(
   memPath: string,
   outputName: string,
   metadata: Record<string, unknown>,
+  from: number = PROGRESS.outputStart,
 ): Promise<{ size: number; opfsPath: string }> {
   const extension = outputName.split('.').pop();
   const opfsPath = `pixelpress/jobs/${jobId}/output.${extension}`;
@@ -175,7 +224,7 @@ async function persistMemFile(
       offset += read;
       send('progress', {
         id: jobId,
-        progress: 97 + Math.round((offset / Math.max(size, 1)) * 2),
+        progress: round1(from + (offset / Math.max(size, 1)) * (PROGRESS.outputEnd - from)),
         message: 'Saving result locally',
       });
     }
@@ -209,6 +258,7 @@ async function deliverPdfResult({
   textSummary,
   usedOriginal,
   opfsAvailable,
+  progressFrom = PROGRESS.outputStart,
 }: {
   jobId: string;
   sourcePath: string;
@@ -218,10 +268,12 @@ async function deliverPdfResult({
   textSummary: TextSummary | null;
   usedOriginal: boolean;
   opfsAvailable: boolean;
+  /** Where the copy starts on the bar. Bailing out early leaves it the rest. */
+  progressFrom?: number;
 }): Promise<void> {
   if (opfsAvailable) {
     try {
-      const persisted = await persistMemFile(jobId, sourcePath, outputName, metadata);
+      const persisted = await persistMemFile(jobId, sourcePath, outputName, metadata, progressFrom);
       send('done', {
         id: jobId,
         outputName,
@@ -284,13 +336,15 @@ async function getOCRWorker(
   jobId: string,
   page: number,
   pages: number,
+  share: number,
+  pagesEnd: number,
   language: ResolvedSettings['ocrLanguage'],
 ): Promise<any> {
   if (ocrWorker) return ocrWorker;
   const languageLabel = OCR_LANGUAGE_LABELS[language];
   send('progress', {
     id: jobId,
-    progress: pageProgress(page, pages, 0),
+    progress: pageProgress(page, pages, share, pagesEnd),
     message: `Loading the ${languageLabel} text recognition model for the first time`,
   });
   if (!createOCRWorker) {
@@ -311,9 +365,12 @@ async function getOCRWorker(
         progress: pageProgress(
           ocrContext.page,
           ocrContext.pages,
-          0.3 + 0.7 * ((ocrContext.tile + (Number(message.progress) || 0)) / ocrContext.tiles),
+          ocrContext.share +
+            (1 - ocrContext.share) *
+              ((ocrContext.tile + (Number(message.progress) || 0)) / ocrContext.tiles),
+          ocrContext.pagesEnd,
         ),
-        message: `Reading text on page ${ocrContext.page + 1} of ${ocrContext.pages}`,
+        message: `Reading text · page ${ocrContext.page + 1} of ${ocrContext.pages}`,
       });
     },
   });
@@ -349,7 +406,7 @@ async function processJob({ id, file, settings, fallbacks = [] }: ProcessRequest
   let fatalRiskPhase: FatalRiskPhase = null;
   let runtimeTrapped = false;
   try {
-    send('progress', { id, progress: 1, message: 'Preparing local workspace' });
+    send('progress', { id, progress: PROGRESS.stageStart, message: 'Preparing local workspace' });
     if (fallbacks.includes('skip-ocr')) {
       send('warning', {
         id,
@@ -414,6 +471,7 @@ async function processJob({ id, file, settings, fallbacks = [] }: ProcessRequest
         textSummary: null,
         usedOriginal: true,
         opfsAvailable,
+        progressFrom: PROGRESS.analysisEnd,
       });
     };
     const preserveOriginal =
@@ -447,8 +505,10 @@ async function processJob({ id, file, settings, fallbacks = [] }: ProcessRequest
     for (let page = 0; page < pages; page += 1) {
       send('progress', {
         id,
-        progress: 10 + Math.round(((page + 1) / pages) * 12),
-        message: `Checking searchable text on page ${page + 1} of ${pages}`,
+        progress:
+          PROGRESS.analysisStart +
+          Math.round(((page + 1) / pages) * (PROGRESS.analysisEnd - PROGRESS.analysisStart)),
+        message: `Checking searchable text · page ${page + 1} of ${pages}`,
       });
       const analysis = JSON.parse(
         callPython('pp_analyze_page', id, page, settings.strategy === 'auto'),
@@ -513,13 +573,38 @@ async function processJob({ id, file, settings, fallbacks = [] }: ProcessRequest
       .map(({ page }) => page);
     const lastOriginalPage = nativePages.at(-1) ?? -1;
 
+    // Now that every page's branch is known, the per-page pass and finalisation
+    // can be sized against each other. The two strategies sit at opposite ends:
+    // flattening spends everything rasterising pages and reaches no image pass,
+    // while preserving copies pages in milliseconds and does its real work on
+    // the embedded images afterwards. A fixed boundary would strand one of them.
+    const pagesEta = pageStrategies.reduce(
+      (total, strategy, page) =>
+        total +
+        (strategy === 'flatten' ? ETA.flattenPage : ETA.preservePage) +
+        (needsOcr[page] ? ETA.ocrPage : 0),
+      0,
+    );
+    // Only preserved pages reach the image passes; the rest is writing the file.
+    const finalizeEta =
+      ETA.saveBase +
+      (nativePages.length > 0
+        ? ETA.nativeBase + (ETA.imagePerImage + ETA.nativePerImage) * nativePages.length
+        : 0);
+    const [pagesEnd] = splitBand(PROGRESS.pagesStart, PROGRESS.processingEnd, [
+      pagesEta,
+      finalizeEta,
+    ]);
+
     for (let page = 0; page < pages; page += 1) {
       const analysis = analyses[page];
-      if (pageStrategies[page] === 'flatten') {
+      const flattened = pageStrategies[page] === 'flatten';
+      const shareBeforeOcr = flattened ? SHARE_BEFORE_OCR.flatten : SHARE_BEFORE_OCR.preserve;
+      if (flattened) {
         // A single huge page can be dozens of tiles, so the bar advances per
         // tile rather than per page — otherwise it sits still for minutes.
-        const label = `Flattening page ${page + 1} of ${pages}`;
-        send('progress', { id, progress: pageProgress(page, pages, 0), message: label });
+        const label = `Flattening · page ${page + 1} of ${pages}`;
+        send('progress', { id, progress: pageProgress(page, pages, 0, pagesEnd), message: label });
         const flatten = JSON.parse(callPython('pp_begin_flatten_page', id, page));
         for (let tile = 0; tile < flatten.tiles; tile += 1) {
           callPython('pp_flatten_tile', id, tile);
@@ -528,9 +613,11 @@ async function processJob({ id, file, settings, fallbacks = [] }: ProcessRequest
             progress: pageProgress(
               page,
               pages,
-              ((tile + 1) / flatten.tiles) * (needsOcr[page] ? 0.3 : 1),
+              ((tile + 1) / flatten.tiles) * (needsOcr[page] ? shareBeforeOcr : 1),
+              pagesEnd,
             ),
-            message: flatten.tiles > 1 ? `${label} · region ${tile + 1} of ${flatten.tiles}` : label,
+            message:
+              flatten.tiles > 1 ? `${label} · region ${tile + 1} of ${flatten.tiles}` : label,
           });
         }
         callPython('pp_finish_flatten_page', id, analysis.usable);
@@ -541,8 +628,8 @@ async function processJob({ id, file, settings, fallbacks = [] }: ProcessRequest
       } else {
         send('progress', {
           id,
-          progress: pageProgress(page, pages, needsOcr[page] ? 0.3 : 1),
-          message: `Preserving page ${page + 1} of ${pages}`,
+          progress: pageProgress(page, pages, needsOcr[page] ? shareBeforeOcr : 1, pagesEnd),
+          message: `Preserving · page ${page + 1} of ${pages}`,
         });
         callPython('pp_copy_original_page', id, page, page === lastOriginalPage);
         if (!needsOcr[page]) {
@@ -551,7 +638,14 @@ async function processJob({ id, file, settings, fallbacks = [] }: ProcessRequest
         }
       }
       if (needsOcr[page]) {
-        const recognizer = await getOCRWorker(id, page, pages, settings.ocrLanguage);
+        const recognizer = await getOCRWorker(
+          id,
+          page,
+          pages,
+          shareBeforeOcr,
+          pagesEnd,
+          settings.ocrLanguage,
+        );
         const plan = JSON.parse(callPython('pp_begin_ocr', id, page, OCR_RENDER_DPI));
         await recognizer.setParameters({
           user_defined_dpi: String(plan.dpi),
@@ -559,11 +653,24 @@ async function processJob({ id, file, settings, fallbacks = [] }: ProcessRequest
         const imagePath = `/tmp/pixelpress-${id}-ocr-tile.jpg`;
         const pdfPath = `/tmp/pixelpress-${id}-ocr-tile.pdf`;
         for (let tile = 0; tile < plan.tiles; tile += 1) {
-          ocrContext = { jobId: id, page, pages, tile, tiles: plan.tiles };
+          ocrContext = {
+            jobId: id,
+            page,
+            pages,
+            tile,
+            tiles: plan.tiles,
+            share: shareBeforeOcr,
+            pagesEnd,
+          };
           send('progress', {
             id,
-            progress: pageProgress(page, pages, 0.3 + (0.7 * tile) / plan.tiles),
-            message: `Reading text on page ${page + 1} of ${pages} · region ${tile + 1} of ${plan.tiles}`,
+            progress: pageProgress(
+              page,
+              pages,
+              shareBeforeOcr + ((1 - shareBeforeOcr) * tile) / plan.tiles,
+              pagesEnd,
+            ),
+            message: `Reading text · page ${page + 1} of ${pages} · region ${tile + 1} of ${plan.tiles}`,
           });
           try {
             fatalRiskPhase = 'ocr-render';
@@ -603,13 +710,23 @@ async function processJob({ id, file, settings, fallbacks = [] }: ProcessRequest
       const links = JSON.parse(callPython('pp_copy_rebuilt_links', id));
       if (links.warning) send('warning', { id, message: links.warning });
     }
-    send('progress', {
-      id,
-      progress: 92,
-      message: pageStrategies.every((strategy) => strategy === 'flatten')
-        ? 'Optimising flattened PDF'
-        : 'Optimising PDF structure and embedded resources',
-    });
+    const optimiseLabel = pageStrategies.every((strategy) => strategy === 'flatten')
+      ? 'Optimising flattened PDF'
+      : 'Optimising PDF structure and embedded resources';
+    // Three of the four stages below disappear into one blocking PyMuPDF call,
+    // so the UI thread animates their bands from an estimate instead. Each
+    // estimate is superseded the moment a real progress message arrives.
+    const estimate = (from: number, to: number, etaMs: number, message: string): void =>
+      send('progress-estimate', { id, from, to, etaMs: Math.round(etaMs), message });
+    // The scan runs before its own cost can be measured, so it takes a small
+    // fixed cut and the stages it sizes divide up what is left.
+    const scanEnd = round1(pagesEnd + (PROGRESS.processingEnd - pagesEnd) * FINALIZE_SCAN_SHARE);
+    estimate(
+      pagesEnd,
+      scanEnd,
+      ETA.nativeBase + ETA.preservePage * pages,
+      'Preparing pages for optimisation',
+    );
     // Only preserved pages carry embedded images worth reworking; a fully
     // flattened document has already been re-encoded page by page. OCR is text-only.
     const imageDpi =
@@ -617,7 +734,44 @@ async function processJob({ id, file, settings, fallbacks = [] }: ProcessRequest
         ? IMAGE_DETAIL_TARGETS[settings.imageDetail]
         : null;
     fatalRiskPhase = imageDpi ? 'image-optimization' : null;
-    const finalized = JSON.parse(callPython('pp_finalize', id, outputPath, imageDpi));
+    const plan = JSON.parse(callPython('pp_begin_finalize', id, imageDpi));
+    // The planned rasters are rewritten one at a time, so this stretch of the
+    // bar tracks real work rather than an estimate. Everything after it is a
+    // single opaque call into PyMuPDF.
+    const plannedImages = Number(plan.images) || 0;
+    // The native pass walks every embedded image, including the ones the plan
+    // already rewrote — it just skips them cheaply once they are small enough.
+    const embedded = Number(plan.embedded) || 0;
+    const imagesEta = plannedImages * ETA.imagePerImage;
+    const nativeEta = imageDpi ? ETA.nativeBase + ETA.nativePerImage * embedded : 0;
+    const saveEta = ETA.saveBase;
+    const [imagesEnd, nativeEnd] = splitBand(scanEnd, PROGRESS.processingEnd, [
+      imagesEta,
+      nativeEta,
+      saveEta,
+    ]);
+    send('progress', {
+      id,
+      progress: scanEnd,
+      message:
+        plannedImages > 0
+          ? `Optimising ${plannedImages} embedded ${plannedImages === 1 ? 'image' : 'images'}`
+          : optimiseLabel,
+    });
+    for (let image = 0; image < plannedImages; image += 1) {
+      send('progress', {
+        id,
+        progress: round1(scanEnd + (image / plannedImages) * (imagesEnd - scanEnd)),
+        message: `Recompressing · image ${image + 1} of ${plannedImages}`,
+      });
+      // A failure discards the rest of the plan, so stepping further would
+      // report images that are no longer going to be touched.
+      if (JSON.parse(callPython('pp_optimize_image', id, image)).stopped) break;
+    }
+    estimate(imagesEnd, nativeEnd, nativeEta, optimiseLabel);
+    callPython('pp_optimize_images_natively', id);
+    estimate(nativeEnd, PROGRESS.processingEnd, saveEta, 'Writing compressed PDF');
+    const finalized = JSON.parse(callPython('pp_save_output', id, outputPath));
     fatalRiskPhase = null;
     if (finalized.warning) send('warning', { id, message: finalized.warning });
     if (Array.isArray(finalized.recoveredPages)) {

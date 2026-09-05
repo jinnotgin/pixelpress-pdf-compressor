@@ -54,14 +54,21 @@ def pp_open(job_id, input_path, settings_json):
         "tagged": tagged,
     })
 
-def _pp_rewrite_lossless_images(document, dpi, quality):
-    """Rewrite lossless rasters once, using their lowest DPI across placements."""
+def _pp_plan_lossless_images(document, dpi):
+    """
+    Inspect every image placement and return the lossless rasters worth
+    rewriting, each tagged with the lowest DPI it is drawn at. `embedded` counts
+    every placement in the document, which is roughly the work the native lossy
+    pass will do afterwards.
+    """
     images = {}
     mask_xrefs = set()
+    embedded = 0
     # Inspect every placement before replacing anything: replacement is global,
     # and a shared image must retain enough pixels for its largest placement.
     for page in document:
         for image in page.get_images(full=True):
+            embedded += 1
             xref, smask = image[:2]
             if smask:
                 mask_xrefs.add(smask)
@@ -76,7 +83,7 @@ def _pp_rewrite_lossless_images(document, dpi, quality):
                     continue
                 if document.xref_get_key(xref, "ImageMask")[1] == "true":
                     continue
-                images[xref] = {"page": page.number, "smask": smask,
+                images[xref] = {"xref": xref, "page": page.number, "smask": smask,
                                 "dpi": math.inf}
             info = images[xref]
             for _, transform in page.get_image_rects(xref, transform=True):
@@ -87,34 +94,52 @@ def _pp_rewrite_lossless_images(document, dpi, quality):
                                       image[2] * 72 / width,
                                       image[3] * 72 / height)
 
+    # A soft mask only surfaces on the page that uses it, so eligibility can
+    # only be decided once every page has been walked.
     threshold = max(int(dpi) + 1, round(int(dpi) * 1.15))
-    for xref, info in images.items():
-        effective_dpi = info["dpi"]
-        if xref in mask_xrefs or not math.isfinite(effective_dpi) or effective_dpi < threshold:
-            continue
-        pix = pymupdf.Pixmap(document, xref)
-        if pix.colorspace is None:
-            continue
-        if info["smask"]:
-            if pix.alpha:
-                pix = pymupdf.Pixmap(pix, 0)
-            mask = pymupdf.Pixmap(document, info["smask"])
-            pix = pymupdf.Pixmap(pix, mask)
-            del mask
-        factor = 0
-        while effective_dpi / (2 ** (factor + 1)) > dpi:
-            factor += 1
-        if factor:
-            # Shrink color and alpha together to keep mask dimensions aligned.
-            pix.shrink(factor)
-        page = document.load_page(info["page"])
+    eligible = [
+        info for xref, info in images.items()
+        if xref not in mask_xrefs
+        and math.isfinite(info["dpi"])
+        and info["dpi"] >= threshold
+    ]
+    return {"images": eligible, "embedded": embedded}
+
+
+def _pp_rewrite_lossless_image(document, info, dpi, quality):
+    """Shrink and recompress one planned raster. False means it was left alone."""
+    xref = info["xref"]
+    effective_dpi = info["dpi"]
+    pix = pymupdf.Pixmap(document, xref)
+    if pix.colorspace is None:
+        return False
+    if info["smask"]:
         if pix.alpha:
-            page.replace_image(xref, pixmap=pix)
-        else:
-            if pix.colorspace.n not in (1, 3):
-                pix = pymupdf.Pixmap(pymupdf.csRGB, pix)
-            page.replace_image(xref, stream=pix.tobytes("jpeg", jpg_quality=int(quality)))
-        del pix
+            pix = pymupdf.Pixmap(pix, 0)
+        mask = pymupdf.Pixmap(document, info["smask"])
+        pix = pymupdf.Pixmap(pix, mask)
+        del mask
+    factor = 0
+    while effective_dpi / (2 ** (factor + 1)) > dpi:
+        factor += 1
+    if factor:
+        # Shrink color and alpha together to keep mask dimensions aligned.
+        pix.shrink(factor)
+    page = document.load_page(info["page"])
+    if pix.alpha:
+        page.replace_image(xref, pixmap=pix)
+    else:
+        if pix.colorspace.n not in (1, 3):
+            pix = pymupdf.Pixmap(pymupdf.csRGB, pix)
+        page.replace_image(xref, stream=pix.tobytes("jpeg", jpg_quality=int(quality)))
+    del pix
+    return True
+
+
+def _pp_rewrite_lossless_images(document, dpi, quality):
+    """Rewrite lossless rasters once, using their lowest DPI across placements."""
+    for info in _pp_plan_lossless_images(document, dpi)["images"]:
+        _pp_rewrite_lossless_image(document, info, dpi, quality)
 
 
 def _pp_downsample_images(document, dpi, quality):
@@ -131,6 +156,11 @@ def _pp_downsample_images(document, dpi, quality):
     # TODO: Once Pyodide ships PyMuPDF >= 1.28 (with MuPDF >= 1.28), remove
     # _pp_rewrite_lossless_images and restore the simpler lossless=True call.
     _pp_rewrite_lossless_images(document, dpi, quality)
+    _pp_rewrite_lossy_images(document, dpi, quality)
+
+
+def _pp_rewrite_lossy_images(document, dpi, quality):
+    """PyMuPDF's own pass over already-lossy rasters. Opaque and uninterruptible."""
     document.rewrite_images(
         dpi_threshold=max(int(dpi) + 1, round(int(dpi) * 1.15)),
         dpi_target=int(dpi),
@@ -572,12 +602,82 @@ def pp_copy_rebuilt_links(job_id):
         warning = f"Preserved {copied} links on rebuilt pages; {skipped} unsupported links were skipped."
     return json.dumps({"copied": copied, "skipped": skipped, "warning": warning})
 
-def pp_finalize(job_id, output_path, image_dpi):
+def _pp_note_finalize_warning(job, message):
+    job.setdefault("finalize_warnings", []).append(message)
+
+
+def _pp_abandon_image_pass(job):
+    """Void whatever image work is still pending, so no later stage resumes it."""
+    dpi = job.get("image_dpi") or 0
+    job["image_plan"] = []
+    job["image_dpi"] = 0
+    return dpi
+
+
+def _pp_handle_finalize_error(job, error):
+    """
+    Shared handler for a failed image pass, whichever stage raised it.
+
+    A "Bad PatternType" abort is recoverable: the document is rebuilt a page at
+    a time, which re-optimises every image on its own. Anything else abandons
+    image rewriting with a warning. Either way the pending plan is void, so the
+    caller stops stepping through it and moves on to saving.
+    """
+    dpi = _pp_abandon_image_pass(job)
+    if "Bad PatternType" not in str(error) or not dpi:
+        _pp_note_finalize_warning(job, f"Image rewriting was skipped: {error}")
+        return
+    output = job["output"]
+    try:
+        recovered, pages, _, skipped_links = _pp_recover_bad_patterns(
+            output,
+            int(dpi),
+            int(job["settings"]["jpegQuality"]),
+        )
+    except Exception as recovery_error:
+        _pp_note_finalize_warning(
+            job,
+            f"Image rewriting was skipped: {error}. "
+            f"Automatic print recovery also failed: {recovery_error}"
+        )
+        return
+    output.close()
+    job["output"] = recovered
+    job["recovered_pages"] = [page - 1 for page in pages]
+    if pages:
+        page_label = "page" if len(pages) == 1 else "pages"
+        _pp_note_finalize_warning(
+            job,
+            f"Recovered an invalid PDF pattern by printing {page_label} "
+            f"{', '.join(str(page) for page in pages)}; selectable text was "
+            "restored where possible."
+        )
+    else:
+        _pp_note_finalize_warning(
+            job,
+            "Recovered an invalid shared PDF pattern by rebuilding and "
+            "optimising its pages independently."
+        )
+    if skipped_links:
+        _pp_note_finalize_warning(
+            job,
+            f"{skipped_links} unsupported links on the recovered PDF were skipped."
+        )
+
+
+def pp_begin_finalize(job_id, image_dpi):
+    """
+    Carry the source metadata across and work out how much image rewriting is
+    ahead, without doing any of it. The counts let the caller show real progress
+    over the images it is about to step through, and estimate the opaque stages.
+    """
     job = _PP_JOBS[job_id]
     output = job["output"]
     source = job["source"]
-    warnings = []
-    recovered_pages = []
+    job["finalize_warnings"] = []
+    job["recovered_pages"] = []
+    job["image_plan"] = []
+    job["image_dpi"] = int(image_dpi or 0)
     if output is not source:
         try:
             metadata = source.metadata
@@ -588,45 +688,66 @@ def pp_finalize(job_id, output_path, image_dpi):
                 output.set_toc(toc)
         except Exception:
             pass
-    if image_dpi:
+    embedded = 0
+    if job["image_dpi"]:
         try:
-            _pp_downsample_images(output, int(image_dpi), int(job["settings"]["jpegQuality"]))
+            plan = _pp_plan_lossless_images(output, job["image_dpi"])
         except Exception as error:
-            if "Bad PatternType" in str(error):
-                try:
-                    recovered, pages, _, skipped_links = _pp_recover_bad_patterns(
-                        output,
-                        int(image_dpi),
-                        int(job["settings"]["jpegQuality"]),
-                    )
-                    output.close()
-                    output = recovered
-                    job["output"] = output
-                    recovered_pages = [page - 1 for page in pages]
-                    if pages:
-                        page_label = "page" if len(pages) == 1 else "pages"
-                        warnings.append(
-                            f"Recovered an invalid PDF pattern by printing {page_label} "
-                            f"{', '.join(str(page) for page in pages)}; selectable text was "
-                            "restored where possible."
-                        )
-                    else:
-                        warnings.append(
-                            "Recovered an invalid shared PDF pattern by rebuilding and "
-                            "optimising its pages independently."
-                        )
-                    if skipped_links:
-                        warnings.append(
-                            f"{skipped_links} unsupported links on the recovered PDF were skipped."
-                        )
-                except Exception as recovery_error:
-                    warnings.append(
-                        f"Image rewriting was skipped: {error}. "
-                        f"Automatic print recovery also failed: {recovery_error}"
-                    )
-            else:
-                warnings.append(f"Image rewriting was skipped: {error}")
-    output.save(
+            _pp_handle_finalize_error(job, error)
+        else:
+            job["image_plan"] = plan["images"]
+            embedded = plan["embedded"]
+    return json.dumps({
+        "images": len(job["image_plan"]),
+        "embedded": embedded,
+        "pages": job["pages"],
+    })
+
+
+def pp_optimize_image(job_id, index):
+    """
+    Rewrite one planned raster. `stopped` means the plan is void — either it ran
+    out or a failure discarded it — and the caller should stop stepping.
+    """
+    job = _PP_JOBS[job_id]
+    plan = job.get("image_plan") or []
+    index = int(index)
+    if index >= len(plan):
+        return json.dumps({"stopped": True, "changed": False})
+    try:
+        changed = _pp_rewrite_lossless_image(
+            job["output"],
+            plan[index],
+            job["image_dpi"],
+            int(job["settings"]["jpegQuality"]),
+        )
+    except Exception as error:
+        _pp_handle_finalize_error(job, error)
+        return json.dumps({"stopped": True, "changed": False})
+    return json.dumps({"stopped": False, "changed": bool(changed)})
+
+
+def pp_optimize_images_natively(job_id):
+    """
+    PyMuPDF's own lossy pass over the remaining rasters. A single blocking call
+    with no progress inside it, so the caller estimates its duration instead.
+    """
+    job = _PP_JOBS[job_id]
+    dpi = job.get("image_dpi") or 0
+    if not dpi:
+        return json.dumps({"ran": False})
+    try:
+        _pp_rewrite_lossy_images(job["output"], int(dpi), int(job["settings"]["jpegQuality"]))
+    except Exception as error:
+        _pp_handle_finalize_error(job, error)
+        return json.dumps({"ran": False})
+    return json.dumps({"ran": True})
+
+
+def pp_save_output(job_id, output_path):
+    """Write and verify the PDF, reporting every warning finalisation collected."""
+    job = _PP_JOBS[job_id]
+    job["output"].save(
         output_path,
         garbage=4,
         deflate=True,
@@ -639,12 +760,13 @@ def pp_finalize(job_id, output_path, image_dpi):
     with pymupdf.open(output_path) as verification:
         if len(verification) != job["pages"]:
             raise RuntimeError("The output page count did not match the source PDF.")
-    warning = " ".join(warnings) if warnings else None
+    warnings = job.get("finalize_warnings") or []
     return json.dumps({
         "size": os.path.getsize(output_path),
-        "warning": warning,
-        "recoveredPages": recovered_pages,
+        "warning": " ".join(warnings) if warnings else None,
+        "recoveredPages": job.get("recovered_pages") or [],
     })
+
 
 def pp_close(job_id):
     job = _PP_JOBS.pop(job_id, None)
