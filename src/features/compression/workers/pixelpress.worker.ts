@@ -763,6 +763,7 @@ async function processJob({ id, file, settings, fallbacks = [] }: ProcessRequest
         planned: plannedImages,
         rewritten: rewrittenImages,
         annotations: Number(plan.annotations) || 0,
+        inline: Number(plan.inline) || 0,
         unreached: Number(plan.unreached) || 0,
       },
     });

@@ -54,19 +54,37 @@ class FinalizeStageTests(unittest.TestCase):
                 break
         return steps
 
+    def fails_on(self, document, message):
+        """A rewrite that only breaks for `document`, leaving every other one real.
+
+        Recovery re-optimises a copy of each page, so a failure planted for the
+        whole module would break the recovery it is meant to trigger too.
+        """
+        original = pp._pp_rewrite_image
+
+        def rewrite(target, info, dpi, quality):
+            if target is document:
+                raise RuntimeError(message)
+            return original(target, info, dpi, quality)
+
+        return patch.object(pp, "_pp_rewrite_image", side_effect=rewrite)
+
     def test_plan_counts_images_and_each_step_rewrites_one(self):
         self.open_job()
         plan = json.loads(pp.pp_begin_finalize(self.job_id, 72))
         self.assertEqual(plan["images"], 2)
         self.assertEqual(plan["pages"], 2)
-        self.assertGreaterEqual(plan["embedded"], 2)
+        # The object pass reached everything, so the two walks that exist to
+        # cover what it cannot see found nothing and gave up on nothing.
+        self.assertEqual((plan["annotations"], plan["inline"], plan["unreached"]),
+                         (0, 0, 0))
 
-        original = pymupdf.Page.replace_image
-        with patch.object(pymupdf.Page, "replace_image", autospec=True,
-                          side_effect=original) as replace:
+        with patch.object(pp, "_pp_replace_image_stream", autospec=True,
+                          side_effect=pp._pp_replace_image_stream) as replace:
             for index in range(plan["images"]):
                 step = json.loads(pp.pp_optimize_image(self.job_id, index))
                 self.assertFalse(step["stopped"])
+                self.assertTrue(step["changed"])
                 self.assertEqual(replace.call_count, index + 1)
 
     def test_stepping_past_the_plan_stops_instead_of_raising(self):
@@ -80,7 +98,7 @@ class FinalizeStageTests(unittest.TestCase):
                 for page in document]
 
     def test_staged_run_matches_the_single_shot_pass(self):
-        """Stepping image by image must land where the old one-shot pass did."""
+        """Stepping image by image must land where the one-shot pass does."""
         source = self.make_source()
         reference = pymupdf.open()
         with pymupdf.open(source) as original:
@@ -92,8 +110,7 @@ class FinalizeStageTests(unittest.TestCase):
         for page in range(2):
             pp.pp_copy_original_page(self.job_id, page, page == 1)
         plan = json.loads(pp.pp_begin_finalize(self.job_id, 72))
-        self.step_through_images(plan["images"])
-        pp.pp_optimize_images_natively(self.job_id)
+        self.assertEqual(self.step_through_images(plan["images"]), 2)
         saved = json.loads(pp.pp_save_output(self.job_id, self.output_path()))
 
         self.assertIsNone(saved["warning"])
@@ -107,34 +124,41 @@ class FinalizeStageTests(unittest.TestCase):
         self.assertEqual(plan["images"], 2)
         before = job["output"]
 
-        with patch.object(pp, "_pp_rewrite_lossless_image",
-                          side_effect=RuntimeError("Bad PatternType")):
+        with self.fails_on(before, "Bad PatternType"):
             self.assertEqual(self.step_through_images(plan["images"]), 1)
 
         self.assertIsNot(job["output"], before)
         self.assertEqual(job["image_plan"], [])
         self.assertEqual(job["image_dpi"], 0)
-        # The plan is void, so the native pass must not run against the rebuild.
-        self.assertFalse(json.loads(pp.pp_optimize_images_natively(self.job_id))["ran"])
+        # The plan is void, so no later step resumes it against the rebuild.
+        self.assertTrue(json.loads(pp.pp_optimize_image(self.job_id, 0))["stopped"])
         saved = json.loads(pp.pp_save_output(self.job_id, self.output_path()))
         self.assertIn("Recovered an invalid", saved["warning"])
         with pymupdf.open(self.output_path()) as output:
             self.assertEqual(len(output), 2)
 
-    def test_bad_pattern_in_the_native_pass_recovers_once(self):
+    def test_bad_pattern_while_planning_recovers_once(self):
+        """Planning walks the document too, so it can abort the same way."""
         job = self.open_job()
-        json.loads(pp.pp_begin_finalize(self.job_id, 72))
-        job["image_plan"] = []
-        with patch.object(pp, "_pp_rewrite_lossy_images",
-                          side_effect=RuntimeError("Bad PatternType")):
-            self.assertFalse(json.loads(pp.pp_optimize_images_natively(self.job_id))["ran"])
+        original = pp._pp_plan_images
+        output = job["output"]
+
+        def plan_images(document, dpi):
+            if document is output:
+                raise RuntimeError("Bad PatternType")
+            return original(document, dpi)
+
+        with patch.object(pp, "_pp_plan_images", side_effect=plan_images):
+            plan = json.loads(pp.pp_begin_finalize(self.job_id, 72))
+        self.assertEqual(plan["images"], 0)
+        self.assertIsNot(job["output"], output)
         saved = json.loads(pp.pp_save_output(self.job_id, self.output_path()))
         self.assertIn("Recovered an invalid", saved["warning"])
 
     def test_other_failures_abandon_images_but_still_save(self):
         job = self.open_job()
         plan = json.loads(pp.pp_begin_finalize(self.job_id, 72))
-        with patch.object(pp, "_pp_rewrite_lossless_image",
+        with patch.object(pp, "_pp_rewrite_image",
                           side_effect=RuntimeError("something else broke")):
             self.assertEqual(self.step_through_images(plan["images"]), 1)
         self.assertEqual(job["image_plan"], [])
@@ -148,7 +172,7 @@ class FinalizeStageTests(unittest.TestCase):
     def test_failed_recovery_reports_both_errors(self):
         self.open_job()
         plan = json.loads(pp.pp_begin_finalize(self.job_id, 72))
-        with patch.object(pp, "_pp_rewrite_lossless_image",
+        with patch.object(pp, "_pp_rewrite_image",
                           side_effect=RuntimeError("Bad PatternType")), \
              patch.object(pp, "_pp_recover_bad_patterns",
                           side_effect=RuntimeError("recovery failed")):
@@ -161,8 +185,7 @@ class FinalizeStageTests(unittest.TestCase):
         job["source"].set_metadata({"title": "Carried across"})
         plan = json.loads(pp.pp_begin_finalize(self.job_id, 0))
         self.assertEqual(plan["images"], 0)
-        self.assertEqual(plan["embedded"], 0)
-        self.assertFalse(json.loads(pp.pp_optimize_images_natively(self.job_id))["ran"])
+        self.assertTrue(json.loads(pp.pp_optimize_image(self.job_id, 0))["stopped"])
         saved = json.loads(pp.pp_save_output(self.job_id, self.output_path()))
         self.assertIsNone(saved["warning"])
         with pymupdf.open(self.output_path()) as output:

@@ -103,14 +103,17 @@ export interface StrategyDebugReport {
 
 /**
  * What the image pass found, reported once per job so real inputs can be
- * measured rather than guessed at. `unreached` counts images that are drawn but
- * carry no xref to rewrite — inline images, plus the annotation appearances
- * that `annotations` counts separately and the pass does reach.
+ * measured rather than guessed at. `annotations` and `inline` count what the
+ * two walks past the page's own resources reached — appearance streams, and
+ * images written into a content stream rather than stored as objects.
+ * `unreached` counts the streams whose inline images could not be located
+ * confidently enough to touch any of them.
  */
 export interface ImageDebugReport {
   planned: number;
   rewritten: number;
   annotations: number;
+  inline: number;
   unreached: number;
 }
 
