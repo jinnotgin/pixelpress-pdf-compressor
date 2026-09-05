@@ -6,9 +6,8 @@ import pymupdf
 _PP_JOBS = {}
 _PP_TILE_PX = 3072
 _PP_MAX_OCR_PIXELS = 24_000_000
-# The recognition render is transient input to Tesseract and is re-encoded
-# before it reaches the output, so it is kept close to lossless: compression
-# artefacts cost accuracy here and buy nothing.
+# Recognition images are transient and never enter the output PDF. Keep
+# JPEG quality high to avoid sacrificing text recognition accuracy.
 _PP_OCR_JPEG_QUALITY = 92
 
 def pp_open(job_id, input_path, settings_json):
@@ -55,19 +54,68 @@ def pp_open(job_id, input_path, settings_json):
         "tagged": tagged,
     })
 
-def _pp_encoded_pixmap(page, dpi, quality, max_pixels=None):
-    zoom = float(dpi) / 72.0
-    width = max(1, math.ceil(page.rect.width * zoom))
-    height = max(1, math.ceil(page.rect.height * zoom))
-    if max_pixels and width * height > max_pixels:
-        factor = math.sqrt(max_pixels / float(width * height))
-        zoom *= factor
-        width = max(1, math.ceil(page.rect.width * zoom))
-        height = max(1, math.ceil(page.rect.height * zoom))
-    matrix = pymupdf.Matrix(zoom, zoom)
-    pix = page.get_pixmap(matrix=matrix, alpha=False)
-    data = pix.tobytes(output="jpeg", jpg_quality=int(quality))
-    return data, width, height, zoom * 72.0
+def _pp_rewrite_lossless_images(document, dpi, quality):
+    """Rewrite lossless rasters once, using their lowest DPI across placements."""
+    images = {}
+    mask_xrefs = set()
+    # Inspect every placement before replacing anything: replacement is global,
+    # and a shared image must retain enough pixels for its largest placement.
+    for page in document:
+        for image in page.get_images(full=True):
+            xref, smask = image[:2]
+            if smask:
+                mask_xrefs.add(smask)
+            # Newly inserted PNGs may be stored as uncompressed PDF samples.
+            lossless = image[8] in ("", "FlateDecode", "LZWDecode", "RunLengthDecode")
+            if xref <= 0 or not lossless or image[4] == 1:
+                continue
+            if xref not in images:
+                # Explicit /Mask and stencil masks need different treatment from
+                # /SMask. Preserve those images rather than discard transparency.
+                if document.xref_get_key(xref, "Mask")[0] != "null":
+                    continue
+                if document.xref_get_key(xref, "ImageMask")[1] == "true":
+                    continue
+                images[xref] = {"page": page.number, "smask": smask,
+                                "dpi": math.inf}
+            info = images[xref]
+            for _, transform in page.get_image_rects(xref, transform=True):
+                width = math.hypot(transform.a, transform.b)
+                height = math.hypot(transform.c, transform.d)
+                if width > 0 and height > 0:
+                    info["dpi"] = min(info["dpi"],
+                                      image[2] * 72 / width,
+                                      image[3] * 72 / height)
+
+    threshold = max(int(dpi) + 1, round(int(dpi) * 1.15))
+    for xref, info in images.items():
+        effective_dpi = info["dpi"]
+        if xref in mask_xrefs or not math.isfinite(effective_dpi) or effective_dpi < threshold:
+            continue
+        pix = pymupdf.Pixmap(document, xref)
+        if pix.colorspace is None:
+            continue
+        if info["smask"]:
+            if pix.alpha:
+                pix = pymupdf.Pixmap(pix, 0)
+            mask = pymupdf.Pixmap(document, info["smask"])
+            pix = pymupdf.Pixmap(pix, mask)
+            del mask
+        factor = 0
+        while effective_dpi / (2 ** (factor + 1)) > dpi:
+            factor += 1
+        if factor:
+            # Shrink color and alpha together to keep mask dimensions aligned.
+            pix.shrink(factor)
+        page = document.load_page(info["page"])
+        if pix.alpha:
+            page.replace_image(xref, pixmap=pix)
+        else:
+            if pix.colorspace.n not in (1, 3):
+                pix = pymupdf.Pixmap(pymupdf.csRGB, pix)
+            page.replace_image(xref, stream=pix.tobytes("jpeg", jpg_quality=int(quality)))
+        del pix
+
 
 def _pp_downsample_images(document, dpi, quality):
     """
@@ -76,12 +124,19 @@ def _pp_downsample_images(document, dpi, quality):
     image it cannot halve is still recompressed. The threshold sits just above
     the floor so images already at or below it are left alone entirely.
     """
+    # PyMuPDF 1.27 / MuPDF bug 709168 can crash while rewriting shared lossless
+    # images. Replace them individually, including their soft masks, then leave
+    # lossless images out of the native pass. See PyMuPDF issue #4918:
+    # https://github.com/pymupdf/PyMuPDF/issues/4918#issuecomment-3966417965
+    # TODO: Once Pyodide ships PyMuPDF >= 1.28 (with MuPDF >= 1.28), remove
+    # _pp_rewrite_lossless_images and restore the simpler lossless=True call.
+    _pp_rewrite_lossless_images(document, dpi, quality)
     document.rewrite_images(
         dpi_threshold=max(int(dpi) + 1, round(int(dpi) * 1.15)),
         dpi_target=int(dpi),
         quality=int(quality),
         lossy=True,
-        lossless=True,
+        lossless=False,
         bitonal=True,
     )
 
@@ -355,68 +410,152 @@ def pp_finish_flatten_page(job_id, restore_text):
     job["rebuilt_pages"].add(state["page_index"])
     return True
 
-def pp_render_ocr_page(job_id, page_index, target_path, dpi):
-    """
-    Render a page for text recognition. The resolution is passed in rather than
-    read from the job settings: recognition accuracy is not the user's
-    size-versus-quality dial, and this image is discarded once the recognised
-    page has been downsampled back to the page raster resolution.
+def pp_begin_ocr(job_id, page_index, dpi):
+    """Plan large recognition tiles, independent of the output image settings.
+
+    A 256-pixel margin on either side supplies context. Word candidates from
+    overlapping tiles are merged before any selectable text is written.
     """
     job = _PP_JOBS[job_id]
     page = job["source"].load_page(int(page_index))
-    data, width, height, effective_dpi = _pp_encoded_pixmap(
-        page,
-        int(dpi),
-        _PP_OCR_JPEG_QUALITY,
-        _PP_MAX_OCR_PIXELS,
-    )
+    zoom = float(dpi) / 72.0
+    width = math.ceil(page.rect.width * zoom)
+    height = math.ceil(page.rect.height * zoom)
+    # Keep an ordinary page whole; large pages use ~21 MP tiles at most.
+    whole = width * height <= _PP_MAX_OCR_PIXELS
+    core_px = 4096
+    nx = 1 if whole else max(1, math.ceil(width / core_px))
+    ny = 1 if whole else max(1, math.ceil(height / core_px))
+    tiles = []
+    for y in range(ny):
+        for x in range(nx):
+            core = pymupdf.Rect(
+                page.rect.width * x / nx, page.rect.height * y / ny,
+                page.rect.width * (x + 1) / nx, page.rect.height * (y + 1) / ny,
+            )
+            margin = 256 / zoom
+            clip = pymupdf.Rect(core.x0 - margin, core.y0 - margin,
+                                core.x1 + margin, core.y1 + margin) & page.rect
+            tiles.append({"core": core, "clip": clip})
+    job["ocr"] = {"page": page, "page_index": int(page_index),
+                  "zoom": zoom, "tiles": tiles, "layers": []}
+    return json.dumps({"tiles": len(tiles), "dpi": dpi})
+
+
+def pp_render_ocr_tile(job_id, tile_index, target_path):
+    state = _PP_JOBS[job_id]["ocr"]
+    tile = state["tiles"][int(tile_index)]
+    zoom = state["zoom"]
+    pix = state["page"].get_pixmap(matrix=pymupdf.Matrix(zoom, zoom),
+                                    clip=tile["clip"], alpha=False)
+    # MuPDF rounds clips to pixel boundaries; use the actual pixmap origin
+    # and extent when mapping recognition coordinates back into PDF points.
+    tile["render_rect"] = pymupdf.Rect(pix.x / zoom, pix.y / zoom,
+                                       (pix.x + pix.width) / zoom,
+                                       (pix.y + pix.height) / zoom)
     with open(target_path, "wb") as output:
-        output.write(data)
-    return json.dumps({"width": width, "height": height, "effectiveDpi": effective_dpi})
+        output.write(pix.tobytes(output="jpeg", jpg_quality=_PP_OCR_JPEG_QUALITY))
+    return True
 
-def pp_append_ocr_pdf(job_id, pdf_path, page_index):
-    """
-    Tesseract returns the page as its invisible text layer drawn over the image
-    it was given, which is deliberately rendered far above the output
-    resolution. Swapping that image for a fresh render at the page raster
-    resolution is what keeps recognition accuracy from dictating file size,
-    while leaving the text layer — and the fonts Tesseract embedded for it —
-    untouched.
 
-    The replacement is rendered from the source page rather than resampled from
-    Tesseract's copy, so it costs no extra encoding generation, and it lands on
-    the exact resolution asked for: `rewrite_images` can only halve, so it would
-    leave the page at twice the target. It is still the fallback for the case
-    where the recognised page is not shaped the way we expect.
+def pp_append_ocr_tile(job_id, tile_index, pdf_path):
+    """Keep only the small text PDF while the next recognition image is read."""
+    state = _PP_JOBS[job_id]["ocr"]
+    with open(pdf_path, "rb") as source:
+        text_pdf = pymupdf.open(stream=source.read(), filetype="pdf")
+    try:
+        text_page = text_pdf[0]
+        if text_page.get_images():
+            raise ValueError("OCR must return a text-only PDF, without a page image.")
+        state["layers"].append({"pdf": text_pdf, "tile": int(tile_index)})
+    except Exception:
+        text_pdf.close()
+        raise
+    return True
+
+
+def pp_finish_ocr(job_id):
+    """Merge overlap candidates by geometry, then overlay whole words.
+
+    Comparing across tiles handles inconsistent segmentation (one word versus
+    two). Prefer complete, longer candidates and suppress duplicate boxes, not
+    glyphs at an arbitrary seam. Fonts and invisible rendering stay intact.
     """
     job = _PP_JOBS[job_id]
-    settings = job["settings"]
-    dpi = int(settings["flattenDpi"])
-    quality = int(settings["jpegQuality"])
-    warning = None
-    with pymupdf.open(pdf_path) as page_pdf:
+    state = job.pop("ocr")
+    try:
+        candidates = []
+        for layer_index, layer in enumerate(state["layers"]):
+            tile = state["tiles"][layer["tile"]]
+            rendered = tile["render_rect"]
+            page = layer["pdf"][0]
+            transform = page.rect.torect(rendered)
+            layer["words"] = page.get_text("words")
+            layer["keep"] = set()
+            for index, word in enumerate(layer["words"]):
+                bounds = pymupdf.Rect(word[:4]) * transform
+                # Words touching an internal image edge may be truncated.
+                edges = []
+                source_rect = state["page"].rect
+                if rendered.x0 > source_rect.x0: edges.append(bounds.x0-rendered.x0)
+                if rendered.y0 > source_rect.y0: edges.append(bounds.y0-rendered.y0)
+                if rendered.x1 < source_rect.x1: edges.append(rendered.x1-bounds.x1)
+                if rendered.y1 < source_rect.y1: edges.append(rendered.y1-bounds.y1)
+                complete = not edges or min(edges) > 2 / state["zoom"]
+                candidates.append((complete, len(word[4].strip()), layer_index, index, bounds))
+        # Most complete words first; stable tie-breaking retains tile reading order.
+        candidates.sort(key=lambda item: (-item[0], -item[1], item[2], item[3]))
+        accepted = []
+        # A spatial grid keeps ordinary dense documents from quadratic scans.
+        cells = {}
+        def keys(rect):
+            for y in range(math.floor(rect.y0/72), math.floor(rect.y1/72)+1):
+                for x in range(math.floor(rect.x0/72), math.floor(rect.x1/72)+1):
+                    yield (x, y)
+        for _, _, layer_index, index, bounds in candidates:
+            nearby = set()
+            for key in keys(bounds):
+                nearby.update(cells.get(key, ()))
+            duplicate = False
+            for other_index in nearby:
+                other_layer, other = accepted[other_index]
+                if other_layer == layer_index:
+                    continue
+                intersection = (bounds & other).get_area()
+                if intersection > 0.45 * min(bounds.get_area(), other.get_area()):
+                    duplicate = True
+                    break
+            if not duplicate:
+                state["layers"][layer_index]["keep"].add(index)
+                accepted_index = len(accepted)
+                accepted.append((layer_index, bounds))
+                for key in keys(bounds):
+                    cells.setdefault(key, []).append(accepted_index)
+        target = job["output"].load_page(state["page_index"])
+        rotation = target.rotation
+        derotation = target.derotation_matrix
+        # Calculate placement with /Rotate=0 so crop-box offsets remain correct.
+        target.set_rotation(0)
         try:
-            target = page_pdf.load_page(0)
-            images = target.get_images(full=True)
-            if images:
-                data, _, _, _ = _pp_encoded_pixmap(
-                    job["source"].load_page(int(page_index)),
-                    dpi,
-                    quality,
-                    _PP_MAX_OCR_PIXELS,
-                )
-                target.replace_image(images[0][0], stream=data)
-        except Exception as error:
-            try:
-                _pp_downsample_images(page_pdf, dpi, quality)
-                warning = None
-            except Exception:
-                warning = (
-                    f"A recognised page kept its full recognition resolution: {error}"
-                )
-        job["output"].insert_pdf(page_pdf)
-    job["rebuilt_pages"].add(int(page_index))
-    return json.dumps({"warning": warning})
+            for layer in state["layers"]:
+                if not layer["keep"]:
+                    continue
+                page = layer["pdf"][0]
+                for index, word in enumerate(layer["words"]):
+                    if index not in layer["keep"]:
+                        page.add_redact_annot(pymupdf.Rect(word[:4]), fill=False, cross_out=False)
+                if len(layer["keep"]) != len(layer["words"]):
+                    page.apply_redactions(images=0, graphics=0)
+                rendered = state["tiles"][layer["tile"]]["render_rect"]
+                target.show_pdf_page(rendered * derotation, layer["pdf"], 0,
+                                     rotate=rotation, keep_proportion=False)
+        finally:
+            target.set_rotation(rotation)
+        return len(accepted)
+    finally:
+        for layer in state["layers"]:
+            layer["pdf"].close()
+
 
 def pp_copy_rebuilt_links(job_id):
     job = _PP_JOBS[job_id]
@@ -511,6 +650,8 @@ def pp_close(job_id):
     job = _PP_JOBS.pop(job_id, None)
     if not job:
         return
+    for layer in job.get("ocr", {}).get("layers", []):
+        layer["pdf"].close()
     output = job.get("output")
     source = job.get("source")
     if output is not None:

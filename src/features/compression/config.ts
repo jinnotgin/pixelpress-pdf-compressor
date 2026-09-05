@@ -23,14 +23,9 @@ export const PYODIDE_MODULE_URL = 'https://cdn.jsdelivr.net/npm/pyodide@314.0.6/
 export const TESSERACT_MODULE_URL =
   'https://cdn.jsdelivr.net/npm/tesseract.js@7.0.0/dist/tesseract.esm.min.js';
 
-/**
- * Resolution the page is rendered at for text recognition. Fixed rather than
- * user-configurable: this is an accuracy input to Tesseract, which wants around
- * 300 DPI, not a size-versus-quality preference. The recognised image never
- * reaches the output at this resolution — the rebuilt page is downsampled to
- * the job's `flattenDpi` — so raising it costs time, not bytes.
- */
-export const OCR_RENDER_DPI = 300;
+/** Recognition-only resolution. Large pages use overlapping tiles; OCR never
+ * supplies or resizes the final page image. */
+export const OCR_RENDER_DPI = 200;
 
 /**
  * Resolution floors behind the embedded-image detail steps.

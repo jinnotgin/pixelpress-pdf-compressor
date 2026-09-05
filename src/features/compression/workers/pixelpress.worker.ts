@@ -40,7 +40,8 @@ declare const self: DedicatedWorkerGlobalScope;
 let pyodide: any = null;
 let ocrWorker: any = null;
 let createOCRWorker: ((...args: any[]) => any) | null = null;
-let ocrContext: { jobId: string; page: number; pages: number } | null = null;
+let ocrContext: { jobId: string; page: number; pages: number; tile: number; tiles: number } | null =
+  null;
 
 function send(type: string, payload: Record<string, unknown> = {}): void {
   self.postMessage({ type, ...payload });
@@ -307,7 +308,11 @@ async function getOCRWorker(
       if (!ocrContext || message.status !== 'recognizing text') return;
       send('progress', {
         id: ocrContext.jobId,
-        progress: pageProgress(ocrContext.page, ocrContext.pages, Number(message.progress) || 0),
+        progress: pageProgress(
+          ocrContext.page,
+          ocrContext.pages,
+          0.3 + 0.7 * ((ocrContext.tile + (Number(message.progress) || 0)) / ocrContext.tiles),
+        ),
         message: `Reading text on page ${ocrContext.page + 1} of ${ocrContext.pages}`,
       });
     },
@@ -466,7 +471,7 @@ async function processJob({ id, file, settings, fallbacks = [] }: ProcessRequest
       ? 'Auto found tagged accessibility structure and no page strongly qualified for flattening.'
       : settings.strategy === 'auto'
         ? 'Auto evaluated every page against the vector-heavy thresholds.'
-        : `Every page follows the explicitly selected ${settings.strategy} strategy unless OCR is needed.`;
+        : `Every page follows the explicitly selected ${settings.strategy} strategy; OCR adds a separate text layer when needed.`;
     send('strategy-debug', {
       id,
       report: {
@@ -480,7 +485,7 @@ async function processJob({ id, file, settings, fallbacks = [] }: ProcessRequest
           decision: decision.strategy,
           finalAction: needsOcr[page] ? 'ocr' : decision.strategy,
           reason: needsOcr[page]
-            ? `OCR takes precedence because page ${page + 1} has no usable selectable text. ${decision.reason}`
+            ? `OCR adds text because page ${page + 1} has no usable selectable text. ${decision.reason}`
             : decision.reason,
           usableText: analyses[page].usable,
           characters: analyses[page].characters,
@@ -504,59 +509,13 @@ async function processJob({ id, file, settings, fallbacks = [] }: ProcessRequest
     }
     const nativePages = pageStrategies
       .map((strategy, page) => ({ strategy, page }))
-      .filter(({ strategy, page }) => strategy === 'optimize' && !needsOcr[page])
+      .filter(({ strategy }) => strategy === 'optimize')
       .map(({ page }) => page);
     const lastOriginalPage = nativePages.at(-1) ?? -1;
 
     for (let page = 0; page < pages; page += 1) {
       const analysis = analyses[page];
-      if (needsOcr[page]) {
-        const languageLabel = OCR_LANGUAGE_LABELS[settings.ocrLanguage];
-        const recognizer = await getOCRWorker(id, page, pages, settings.ocrLanguage);
-        ocrContext = { jobId: id, page, pages };
-        send('progress', {
-          id,
-          progress: pageProgress(page, pages, 0),
-          message: `No selectable text on page ${page + 1}; reading it in ${languageLabel}`,
-        });
-        // Recognition runs at a resolution Tesseract can actually read, not at
-        // the output resolution; `pp_append_ocr_pdf` scales the recognised page
-        // back down, so accuracy here does not inflate the result.
-        const imagePath = `/tmp/pixelpress-${id}-ocr-page`;
-        fatalRiskPhase = 'ocr-render';
-        const render = JSON.parse(
-          callPython('pp_render_ocr_page', id, page, imagePath, OCR_RENDER_DPI),
-        );
-        fatalRiskPhase = null;
-        const imageBytes = pyodide.FS.readFile(imagePath);
-        await recognizer.setParameters({
-          user_defined_dpi: String(Math.round(render.effectiveDpi)),
-        });
-        const result = await recognizer.recognize(
-          imageBytes,
-          { pdfTitle: file.name },
-          { pdf: true, text: true },
-        );
-        ocrContext = null;
-        if (!result.data.pdf) {
-          throw new Error('Text recognition did not produce a searchable PDF page.');
-        }
-        const pagePdfPath = `/tmp/pixelpress-${id}-ocr-page.pdf`;
-        pyodide.FS.writeFile(pagePdfPath, new Uint8Array(result.data.pdf));
-        const appended = JSON.parse(callPython('pp_append_ocr_pdf', id, pagePdfPath, page));
-        if (appended.warning) send('warning', { id, message: appended.warning });
-        textSummary.ocrPages += 1;
-        try {
-          pyodide.FS.unlink(imagePath);
-        } catch {
-          /* ignore */
-        }
-        try {
-          pyodide.FS.unlink(pagePdfPath);
-        } catch {
-          /* ignore */
-        }
-      } else if (pageStrategies[page] === 'flatten') {
+      if (pageStrategies[page] === 'flatten') {
         // A single huge page can be dozens of tiles, so the bar advances per
         // tile rather than per page — otherwise it sits still for minutes.
         const label = `Flattening page ${page + 1} of ${pages}`;
@@ -566,22 +525,78 @@ async function processJob({ id, file, settings, fallbacks = [] }: ProcessRequest
           callPython('pp_flatten_tile', id, tile);
           send('progress', {
             id,
-            progress: pageProgress(page, pages, (tile + 1) / flatten.tiles),
+            progress: pageProgress(
+              page,
+              pages,
+              ((tile + 1) / flatten.tiles) * (needsOcr[page] ? 0.3 : 1),
+            ),
             message: flatten.tiles > 1 ? `${label} · region ${tile + 1} of ${flatten.tiles}` : label,
           });
         }
         callPython('pp_finish_flatten_page', id, analysis.usable);
-        if (analysis.usable) textSummary.rebuiltPages += 1;
-        else textSummary.imageOnlyPages += 1;
+        if (!needsOcr[page]) {
+          if (analysis.usable) textSummary.rebuiltPages += 1;
+          else textSummary.imageOnlyPages += 1;
+        }
       } else {
         send('progress', {
           id,
-          progress: pageProgress(page, pages, 1),
+          progress: pageProgress(page, pages, needsOcr[page] ? 0.3 : 1),
           message: `Preserving page ${page + 1} of ${pages}`,
         });
         callPython('pp_copy_original_page', id, page, page === lastOriginalPage);
-        if (analysis.usable) textSummary.nativePages += 1;
-        else textSummary.imageOnlyPages += 1;
+        if (!needsOcr[page]) {
+          if (analysis.usable) textSummary.nativePages += 1;
+          else textSummary.imageOnlyPages += 1;
+        }
+      }
+      if (needsOcr[page]) {
+        const recognizer = await getOCRWorker(id, page, pages, settings.ocrLanguage);
+        const plan = JSON.parse(callPython('pp_begin_ocr', id, page, OCR_RENDER_DPI));
+        await recognizer.setParameters({
+          user_defined_dpi: String(plan.dpi),
+        });
+        const imagePath = `/tmp/pixelpress-${id}-ocr-tile.jpg`;
+        const pdfPath = `/tmp/pixelpress-${id}-ocr-tile.pdf`;
+        for (let tile = 0; tile < plan.tiles; tile += 1) {
+          ocrContext = { jobId: id, page, pages, tile, tiles: plan.tiles };
+          send('progress', {
+            id,
+            progress: pageProgress(page, pages, 0.3 + (0.7 * tile) / plan.tiles),
+            message: `Reading text on page ${page + 1} of ${pages} · region ${tile + 1} of ${plan.tiles}`,
+          });
+          try {
+            fatalRiskPhase = 'ocr-render';
+            callPython('pp_render_ocr_tile', id, tile, imagePath);
+            fatalRiskPhase = null;
+            const result = await recognizer.recognize(
+              pyodide.FS.readFile(imagePath),
+              { pdfTitle: file.name, pdfTextOnly: true },
+              { pdf: true, text: true },
+            );
+            if (!result.data.pdf) {
+              throw new Error('Text recognition did not produce a searchable text layer.');
+            }
+            pyodide.FS.writeFile(pdfPath, new Uint8Array(result.data.pdf));
+            callPython('pp_append_ocr_tile', id, tile, pdfPath);
+          } finally {
+            ocrContext = null;
+            for (const path of [imagePath, pdfPath]) {
+              try {
+                pyodide.FS.unlink(path);
+              } catch {
+                /* File may not exist yet. */
+              }
+            }
+          }
+        }
+        const wordsAdded = Number(callPython('pp_finish_ocr', id));
+        if (wordsAdded > 0) {
+          textSummary.ocrPages += 1;
+        } else {
+          textSummary.imageOnlyPages += 1;
+          send('warning', { id, message: `No text could be recognised on page ${page + 1}.` });
+        }
       }
     }
     if (opened.hasLinks) {
@@ -596,7 +611,7 @@ async function processJob({ id, file, settings, fallbacks = [] }: ProcessRequest
         : 'Optimising PDF structure and embedded resources',
     });
     // Only preserved pages carry embedded images worth reworking; a fully
-    // flattened or recognised document has already been re-encoded page by page.
+    // flattened document has already been re-encoded page by page. OCR is text-only.
     const imageDpi =
       nativePages.length > 0 && !fallbacks.includes('skip-image-optimization')
         ? IMAGE_DETAIL_TARGETS[settings.imageDetail]
