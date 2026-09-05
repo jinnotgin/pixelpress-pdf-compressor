@@ -76,7 +76,7 @@ lints as real Python.
 ### Inspecting strategy reports
 
 Open the browser developer tools, select **Console**, and filter for
-`PixelPress strategy`. Reports are labeled **Auto**, **Preserve**, or **Flatten**
+`PixelPress strategy`. Reports are labeled **Hybrid**, **Preserve**, or **Flatten**
 to match the requested strategy, including when using the Custom preset.
 Each report includes the document decision, detected PDF features, and a copyable
 object. When pages are analyzed, a table shows each page's compression

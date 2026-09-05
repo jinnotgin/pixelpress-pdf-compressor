@@ -27,7 +27,7 @@ const INITIAL_RUNTIME: RuntimeState = {
 
 function logStrategyDebug(report: StrategyDebugReport): void {
   const isAuto = report.requestedStrategy === 'auto';
-  const strategyLabel = { auto: 'Auto', optimize: 'Preserve', flatten: 'Flatten' };
+  const strategyLabel = { auto: 'Hybrid', optimize: 'Preserve', flatten: 'Flatten' };
   const { thresholds, pages, ...documentReport } = report;
   const displayPages = pages.map(
     ({ checks, contentStreamBytes, finalAction, decision, ...page }) => ({

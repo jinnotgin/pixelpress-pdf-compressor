@@ -21,7 +21,7 @@ export function JobRow({ job, onDownload, onCancel, onRemove, onRetry }: JobRowP
   const removable = isRemovable(job.status);
   const custom = job.settings.preset === 'custom';
   const strategyLabel = {
-    auto: 'Auto',
+    auto: 'Hybrid',
     flatten: 'Flatten',
     optimize: 'Preserve',
   }[job.settings.strategy];

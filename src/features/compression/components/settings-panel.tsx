@@ -128,7 +128,7 @@ export function SettingsPanel({
                       onChange={(value) => patch({ strategy: value as Strategy })}
                       columns={3}
                       options={[
-                        { value: 'auto', label: 'Auto' },
+                        { value: 'auto', label: 'Hybrid' },
                         { value: 'optimize', label: 'Preserve' },
                         { value: 'flatten', label: 'Flatten' },
                       ]}
