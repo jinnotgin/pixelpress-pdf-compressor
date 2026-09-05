@@ -95,7 +95,7 @@ export function StorageDialog({
           label: 'Cached downloads and site data',
           // Pyodide's wheels are plain HTTP fetches and never reach the storage
           // estimate, so this cannot claim to be the whole engine on disk.
-          detail: 'The engine and models, saved for faster starts. Browser settings only.',
+          detail: 'The engine and models, saved for faster starts. Only your browser settings can clear this.',
           bytes: usage.external,
           items: [],
         },
