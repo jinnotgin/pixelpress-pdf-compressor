@@ -15,11 +15,16 @@ interface StorageDialogProps {
   onClearResults: () => Promise<void>;
 }
 
-interface Segment {
+interface Row {
   key: string;
   label: string;
   detail: string;
   bytes: number;
+}
+
+interface Tier extends Row {
+  /** Sub-rows that partition this tier exactly; empty when it cannot be split. */
+  items: Row[];
 }
 
 export function StorageDialog({
@@ -56,56 +61,64 @@ export function StorageDialog({
     }
   };
 
-  const segments: Segment[] = usage
+  const app = usage?.app;
+  const results = app?.results;
+  const workingFiles = app?.working;
+
+  const tiers: Tier[] =
+    usage && app && results && workingFiles
     ? [
         {
-          key: 'results',
-          label: 'Processed PDFs',
-          detail: usage.results.count
-            ? `${usage.results.count} ${usage.results.count === 1 ? 'file' : 'files'}, kept for ${HISTORY_MAX_AGE_DAYS} days`
-            : 'Nothing processed yet',
-          bytes: usage.results.bytes,
+          key: 'app',
+          label: 'Your files',
+          detail: 'Kept on this device until you delete them',
+          bytes: app.total,
+          items: [
+            {
+              key: 'results',
+              label: 'Processed PDFs',
+              detail: results.count
+                ? `${results.count} ${results.count === 1 ? 'file' : 'files'}, kept for ${HISTORY_MAX_AGE_DAYS} days`
+                : 'Nothing processed yet',
+              bytes: results.bytes,
+            },
+            {
+              key: 'working',
+              label: 'Working files',
+              detail: 'Left behind by a run that did not finish',
+              bytes: workingFiles.bytes,
+            },
+          ].filter((row) => row.key === 'results' || row.bytes > 0),
         },
         {
-          key: 'models',
-          label: 'Text recognition models',
-          detail: 'Downloaded once per language, then reused offline',
-          bytes: usage.models,
+          key: 'external',
+          label: 'Cached downloads and site data',
+          // Pyodide's wheels are plain HTTP fetches and never reach the storage
+          // estimate, so this cannot claim to be the whole engine on disk.
+          detail: 'The engine and models, saved for faster starts. Browser settings only.',
+          bytes: usage.external,
+          items: [],
         },
-        {
-          key: 'engine',
-          label: 'Cached engine files',
-          detail: 'The Python and PDF engine the browser saved for faster starts',
-          bytes: usage.engine,
-        },
-        {
-          key: 'stray',
-          label: 'Leftover working files',
-          detail: 'From a run that was interrupted; cleared along with your PDFs',
-          bytes: usage.strayLocal,
-        },
-        {
-          key: 'other',
-          // Without `usageDetails` this bucket is the engine and the models as
-          // well, so it must not claim to be the untouchable remainder.
-          label: usage.detailed ? 'Other site data' : 'Cached downloads and other site data',
-          detail: usage.detailed
-            ? 'Only clearable from your browser settings'
-            : 'Includes the cached engine and models, which is only clearable from your browser settings',
-
-          bytes: usage.other,
-        },
-      ].filter((segment) => segment.bytes > 0 || segment.key === 'results')
+      ]
     : [];
 
+  // Every segment of the bar is one visible row, so the picture and the list
+  // cannot drift apart.
+  const segments: Row[] = tiers.flatMap((tier) =>
+    tier.items.length ? tier.items : [tier],
+  );
+
   const total = usage?.usage ?? 0;
-  // Interrupted runs leave working files behind that nothing else would ever
-  // remove, so the one delete action covers them alongside the finished PDFs.
-  const deletable = usage ? usage.results.bytes + usage.strayLocal : 0;
-  const count = usage?.results.count ?? 0;
-  const confirmCopy = count
-    ? `Delete ${count} processed ${count === 1 ? 'PDF' : 'PDFs'}? Anything you have not downloaded yet is gone for good.`
-    : 'Delete the leftover working files kept on this device?';
+  // One tier, one delete: everything under "Your files" is what `clearLocalFiles`
+  // removes, working files from an interrupted run included.
+  const deletable = app?.total ?? 0;
+  const count = results?.count ?? 0;
+  const confirmParts: string[] = [];
+  if (count) confirmParts.push(`${count} processed ${count === 1 ? 'PDF' : 'PDFs'}`);
+  if (workingFiles?.bytes) confirmParts.push('the leftover working files');
+  const confirmCopy = confirmParts.length
+    ? `Delete ${confirmParts.join(' and ')}? Anything you have not downloaded yet is gone for good.`
+    : 'Delete the files kept on this device?';
 
   return (
     <dialog className="storage-dialog" ref={dialogRef} onClose={onClose} aria-labelledby="storage-dialog-title">
@@ -142,14 +155,29 @@ export function StorageDialog({
           </div>
 
           <ul className="storage-breakdown">
-            {segments.map((segment) => (
-              <li key={segment.key}>
-                <span className={`storage-swatch is-${segment.key}`} aria-hidden="true" />
-                <span className="storage-copy">
-                  <strong>{segment.label}</strong>
-                  <span>{segment.detail}</span>
-                </span>
-                <span className="storage-size">{formatBytes(segment.bytes)}</span>
+            {tiers.map((tier) => (
+              <li className="storage-tier" key={tier.key}>
+                <div className="storage-tier-head">
+                  <span className="storage-copy">
+                    <strong>{tier.label}</strong>
+                    <span>{tier.detail}</span>
+                  </span>
+                  <span className="storage-size">{formatBytes(tier.bytes)}</span>
+                </div>
+                {tier.items.length > 0 && (
+                  <ul className="storage-sublist">
+                    {tier.items.map((item) => (
+                      <li key={item.key}>
+                        <span className={`storage-swatch is-${item.key}`} aria-hidden="true" />
+                        <span className="storage-copy">
+                          <strong>{item.label}</strong>
+                          <span>{item.detail}</span>
+                        </span>
+                        <span className="storage-size">{formatBytes(item.bytes)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </li>
             ))}
           </ul>
@@ -185,7 +213,7 @@ export function StorageDialog({
                 disabled={busy || working || deletable === 0}
                 onClick={() => setConfirming(true)}
               >
-                Delete processed PDFs
+                Delete my files
               </button>
             )}
           </div>

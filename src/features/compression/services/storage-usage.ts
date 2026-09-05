@@ -1,131 +1,103 @@
 /**
  * Storage accounting for the footer readout and the storage dialog.
  *
- * `navigator.storage.estimate()` reports the whole origin, which is more than
- * this app writes: it also covers the Pyodide / Tesseract downloads the browser
- * caches on our behalf. The app's own share (finished results in OPFS) is
- * measured directly by walking `pixelpress/jobs`, and the rest is attributed
- * from the non-standard `usageDetails` breakdown when the browser exposes it.
+ * The split the dialog draws is the one the browser actually supports: what
+ * this app wrote is measured directly by walking OPFS, and everything else is
+ * the remainder of `navigator.storage.estimate()`. That remainder covers the
+ * Pyodide and Tesseract downloads the browser cached on our behalf plus
+ * anything else the origin holds, none of which this app can delete.
+ *
+ * It is deliberately not split further. The old breakdown leaned on the
+ * Chromium-only `usageDetails`, and even there it under-reported: Pyodide's
+ * wheels are ordinary HTTP fetches, so they never appear in `usage` at all. One
+ * honest remainder beats four buckets that only add up on one browser.
  */
 
-import { isOpfsAvailable } from './opfs';
+import { HISTORY_MAX_AGE_MS } from '../config';
 
-/* Same loose handle typing as `opfs.ts`: async iteration over directory entries
-   is still ahead of the DOM lib types. */
-type AnyDirectoryHandle = {
-  entries(): AsyncIterableIterator<[string, AnyFileSystemHandle]>;
-  getDirectoryHandle(name: string, options?: { create?: boolean }): Promise<AnyDirectoryHandle>;
-  removeEntry(name: string, options?: { recursive?: boolean }): Promise<void>;
-};
-type AnyFileSystemHandle = AnyDirectoryHandle & {
-  kind: 'file' | 'directory';
-  getFile(): Promise<File>;
-};
+import {
+  directoryBytes,
+  openJobsDirectory,
+  openOpfsRoot,
+  scanJobFolders,
+} from './job-folders';
 
 export interface StorageUsage {
   /** Everything this origin is using, as the browser reports it. */
   usage: number;
   /** Total the browser is willing to give this origin. */
   quota: number;
-  /** Finished results this app wrote to OPFS. */
-  results: { bytes: number; count: number };
-  /** Text recognition models (Tesseract keeps its trained data in IndexedDB). */
-  models: number;
-  /** Engine downloads the browser cached for us (Cache Storage). */
-  engine: number;
-  /** OPFS bytes outside `pixelpress/jobs`, left by an interrupted or older run. */
-  strayLocal: number;
-  /** Whatever the browser counts that we cannot attribute or clear ourselves. */
-  other: number;
-  /** False when the breakdown below `usage` is guesswork rather than reported. */
-  detailed: boolean;
+  /** What this app wrote, all of it in OPFS and all of it deletable from here. */
+  app: {
+    /** `results.bytes + working.bytes`, measured rather than summed. */
+    total: number;
+    /** Finished results with a download still attached. */
+    results: { bytes: number; count: number };
+    /** Staged inputs and partial output from runs that did not finish. */
+    working: { bytes: number; count: number };
+  };
+  /** Cached engine and model downloads, and any other data the origin holds. */
+  external: number;
 }
 
-const ROOT_DIRECTORY = 'pixelpress';
-
-async function jobsDirectory(options?: { create?: boolean }): Promise<AnyDirectoryHandle | null> {
-  if (!isOpfsAvailable()) return null;
-  try {
-    const root = (await navigator.storage.getDirectory()) as unknown as AnyDirectoryHandle;
-    const pixelpress = await root.getDirectoryHandle(ROOT_DIRECTORY, options);
-    return await pixelpress.getDirectoryHandle('jobs', options);
-  } catch {
-    return null;
-  }
-}
-
-async function directoryBytes(directory: AnyDirectoryHandle): Promise<number> {
-  let bytes = 0;
-  for await (const [, handle] of directory.entries()) {
-    try {
-      if (handle.kind === 'file') {
-        bytes += (await handle.getFile()).size;
-      } else {
-        bytes += await directoryBytes(handle);
-      }
-    } catch {
-      /* a folder being written by the worker right now is fine to skip */
-    }
-  }
-  return bytes;
-}
-
-/** Bytes and job count held in `pixelpress/jobs`. */
-async function measureResults(): Promise<{ bytes: number; count: number }> {
-  const jobs = await jobsDirectory();
-  if (!jobs) return { bytes: 0, count: 0 };
-
-  let bytes = 0;
-  let count = 0;
-  try {
-    for await (const [, handle] of jobs.entries()) {
-      if (handle.kind !== 'directory') continue;
-      count += 1;
-      bytes += await directoryBytes(handle);
-    }
-  } catch {
-    /* report what was counted before the walk failed */
-  }
-  return { bytes, count };
-}
-
-/** Everything in OPFS, including whatever sits outside `pixelpress/jobs`. */
+/** Everything in OPFS, jobs folder or not. */
 async function measureLocalTotal(): Promise<number> {
-  if (!isOpfsAvailable()) return 0;
+  const root = await openOpfsRoot();
+  if (!root) return 0;
   try {
-    const root = (await navigator.storage.getDirectory()) as unknown as AnyDirectoryHandle;
     return await directoryBytes(root);
   } catch {
     return 0;
   }
 }
 
+/**
+ * Splits the app's own bytes into results and working files.
+ *
+ * `working` is derived by subtraction so the two rows always add up to what is
+ * really on disk: anything outside `pixelpress/jobs`, from an older layout or a
+ * write we do not know about, lands there rather than going unaccounted for.
+ * Expired folders count as working files too — they are deleted on the next
+ * startup, but they are occupying the disk right now.
+ */
+async function measureApp(): Promise<StorageUsage['app']> {
+  const [total, scan] = await Promise.all([
+    measureLocalTotal(),
+    scanJobFolders(Date.now() - HISTORY_MAX_AGE_MS),
+  ]);
+
+  let resultBytes = 0;
+  let resultCount = 0;
+  let workingCount = 0;
+  for (const folder of scan?.folders ?? []) {
+    if (folder.kind === 'result') {
+      resultBytes += folder.bytes;
+      resultCount += 1;
+    } else {
+      workingCount += 1;
+    }
+  }
+
+  return {
+    total,
+    results: { bytes: Math.min(resultBytes, total), count: resultCount },
+    working: { bytes: Math.max(0, total - resultBytes), count: workingCount },
+  };
+}
+
 export async function readStorageUsage(): Promise<StorageUsage | null> {
   if (!navigator.storage?.estimate) return null;
 
-  const [estimate, results, localTotal] = await Promise.all([
-    navigator.storage.estimate(),
-    measureResults(),
-    measureLocalTotal(),
-  ]);
+  const [estimate, app] = await Promise.all([navigator.storage.estimate(), measureApp()]);
 
-  // `usageDetails` is Chromium-only; elsewhere everything we did not measure
-  // ourselves lands in "other" rather than being split into invented buckets.
-  const details = (estimate as { usageDetails?: Record<string, number> }).usageDetails;
   const usage = estimate.usage ?? 0;
-  const models = details?.indexedDB ?? 0;
-  const engine = details?.caches ?? 0;
-  const strayLocal = Math.max(0, localTotal - results.bytes);
-
   return {
     usage,
     quota: estimate.quota ?? 0,
-    results,
-    models,
-    engine,
-    strayLocal,
-    other: Math.max(0, usage - results.bytes - strayLocal - models - engine),
-    detailed: Boolean(details),
+    app,
+    // Quota accounting lags our own writes, so mid-run the estimate can read
+    // lower than the bytes we just counted ourselves.
+    external: Math.max(0, usage - app.total),
   };
 }
 
@@ -137,7 +109,7 @@ export async function readStorageUsage(): Promise<StorageUsage | null> {
  * releasing the handle.
  */
 export async function deleteStoredJob(id: string): Promise<void> {
-  const jobs = await jobsDirectory();
+  const jobs = await openJobsDirectory();
   if (!jobs) return;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
@@ -156,9 +128,9 @@ export async function deleteStoredJob(id: string): Promise<void> {
  * are the browser's copy of a CDN download, not the user's data.
  */
 export async function clearLocalFiles(): Promise<void> {
-  if (!isOpfsAvailable()) return;
+  const root = await openOpfsRoot();
+  if (!root) return;
   try {
-    const root = (await navigator.storage.getDirectory()) as unknown as AnyDirectoryHandle;
     const entries: string[] = [];
     for await (const [name] of root.entries()) entries.push(name);
     for (const name of entries) {

@@ -483,30 +483,53 @@ input[type='range'] {
 .storage-swatch.is-results {
   background: var(--accent);
 }
-.storage-meter-part.is-models,
-.storage-swatch.is-models {
-  background: oklch(0.66 0.14 200);
-}
-.storage-meter-part.is-engine,
-.storage-swatch.is-engine {
-  background: oklch(0.74 0.11 145);
-}
-.storage-meter-part.is-stray,
-.storage-swatch.is-stray {
+.storage-meter-part.is-working,
+.storage-swatch.is-working {
   background: oklch(0.78 0.13 75);
 }
-.storage-meter-part.is-other,
-.storage-swatch.is-other {
+.storage-meter-part.is-external,
+.storage-swatch.is-external {
   background: var(--border-strong);
 }
 .storage-breakdown {
-  margin: 18px 0 0;
+  margin: 14px 0 0;
+  padding: 14px 0 0;
+  list-style: none;
+  display: grid;
+  gap: 14px;
+  border-top: 1px solid var(--border);
+}
+/* Two tiers: what PixelPress wrote and can delete, and everything else the
+   origin holds. Only the first splits further, so only it gets swatches. */
+.storage-tier {
+  display: grid;
+  gap: 10px;
+}
+.storage-tier + .storage-tier {
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.storage-tier-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+}
+.storage-tier-head .storage-copy strong {
+  font-size: 0.85rem;
+  letter-spacing: -0.01em;
+}
+.storage-tier-head .storage-size {
+  font-variant-numeric: tabular-nums;
+}
+.storage-sublist {
+  margin: 0;
   padding: 0;
   list-style: none;
   display: grid;
-  gap: 12px;
+  gap: 9px;
 }
-.storage-breakdown li {
+.storage-sublist li {
   display: grid;
   grid-template-columns: 9px minmax(0, 1fr) auto;
   align-items: start;
@@ -540,8 +563,8 @@ input[type='range'] {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 22px;
-  padding-top: 16px;
+  margin-top: 14px;
+  padding-top: 14px;
   border-top: 1px solid var(--border);
 }
 .storage-hint {
