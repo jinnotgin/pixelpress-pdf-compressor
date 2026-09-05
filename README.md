@@ -106,6 +106,15 @@ never include filenames, extracted text, page images, or PDF bytes.
 - OCR adds an invisible searchable-text layer while preserving the page image.
   It runs at 200 DPI and may tile large pages; complex layouts can affect reading
   order and accuracy.
+- Embedded images are processed once per shared image using `Page.replace_image`,
+  avoiding the native whole-document image rewriter. Opaque colour/grayscale
+  images use JPEG; transparent images retain lossless colour and soft masks.
+  Low-DPI images can be recompressed at their existing dimensions; the detail
+  threshold controls resizing only.
+  Bitonal images (including black/white pixels stored as RGB), special masks,
+  unsupported encodings and special colour spaces are preserved. Replacements
+  must reduce image storage size; this is deliberately not full parity with
+  MuPDF's format-specific image rewriter.
 - Run PDF-engine regression tests with `python3 -m unittest discover -s tests -v`
   (PyMuPDF >= 1.26.1; OCR checks also require the `tesseract` CLI).
 - Signed PDFs are kept byte-for-byte unchanged. When compression does not beat

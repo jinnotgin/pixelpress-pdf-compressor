@@ -589,7 +589,7 @@ async function processJob({ id, file, settings, fallbacks = [] }: ProcessRequest
     const finalizeEta =
       ETA.saveBase +
       (nativePages.length > 0
-        ? ETA.nativeBase + (ETA.imagePerImage + ETA.nativePerImage) * nativePages.length
+        ? ETA.nativeBase + ETA.imagePerImage * nativePages.length
         : 0);
     const [pagesEnd] = splitBand(PROGRESS.pagesStart, PROGRESS.processingEnd, [
       pagesEta,
@@ -735,21 +735,11 @@ async function processJob({ id, file, settings, fallbacks = [] }: ProcessRequest
         : null;
     fatalRiskPhase = imageDpi ? 'image-optimization' : null;
     const plan = JSON.parse(callPython('pp_begin_finalize', id, imageDpi));
-    // The planned rasters are rewritten one at a time, so this stretch of the
-    // bar tracks real work rather than an estimate. Everything after it is a
-    // single opaque call into PyMuPDF.
+    // Every supported raster is rewritten individually; only saving is opaque.
     const plannedImages = Number(plan.images) || 0;
-    // The native pass walks every embedded image, including the ones the plan
-    // already rewrote — it just skips them cheaply once they are small enough.
-    const embedded = Number(plan.embedded) || 0;
     const imagesEta = plannedImages * ETA.imagePerImage;
-    const nativeEta = imageDpi ? ETA.nativeBase + ETA.nativePerImage * embedded : 0;
     const saveEta = ETA.saveBase;
-    const [imagesEnd, nativeEnd] = splitBand(scanEnd, PROGRESS.processingEnd, [
-      imagesEta,
-      nativeEta,
-      saveEta,
-    ]);
+    const [imagesEnd] = splitBand(scanEnd, PROGRESS.processingEnd, [imagesEta, saveEta]);
     send('progress', {
       id,
       progress: scanEnd,
@@ -768,9 +758,7 @@ async function processJob({ id, file, settings, fallbacks = [] }: ProcessRequest
       // report images that are no longer going to be touched.
       if (JSON.parse(callPython('pp_optimize_image', id, image)).stopped) break;
     }
-    estimate(imagesEnd, nativeEnd, nativeEta, optimiseLabel);
-    callPython('pp_optimize_images_natively', id);
-    estimate(nativeEnd, PROGRESS.processingEnd, saveEta, 'Writing compressed PDF');
+    estimate(imagesEnd, PROGRESS.processingEnd, saveEta, 'Writing compressed PDF');
     const finalized = JSON.parse(callPython('pp_save_output', id, outputPath));
     fatalRiskPhase = null;
     if (finalized.warning) send('warning', { id, message: finalized.warning });

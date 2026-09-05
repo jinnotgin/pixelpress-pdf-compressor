@@ -6,6 +6,7 @@ describe('PDF worker fatal-error recovery', () => {
   it('recognises the WebAssembly bounds trap reported by Pyodide', () => {
     expect(isRuntimeBoundsTrap(new Error('index out of bounds'))).toBe(true);
     expect(isRuntimeBoundsTrap('RuntimeError: out of bounds memory access')).toBe(true);
+    expect(isRuntimeBoundsTrap(new Error('RuntimeError: memory access out of bounds'))).toBe(true);
     expect(isRuntimeBoundsTrap(new Error('Bad PatternType'))).toBe(false);
   });
 
