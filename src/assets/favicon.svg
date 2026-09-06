@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="PixelPress">
+  <rect width="32" height="32" rx="7" fill="#5254E1" />
+  <g
+    transform="translate(2.5 2.5) scale(1.125)"
+    fill="none"
+    stroke="#FFFFFF"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  >
+    <rect x="6" y="2.75" width="12" height="18.5" rx="2.5" />
+    <path d="M12 6.75v3.5m-1.7-1.7 1.7 1.7 1.7-1.7" />
+    <path d="M12 17.25v-3.5m-1.7 1.7 1.7-1.7 1.7 1.7" />
+  </g>
+</svg>

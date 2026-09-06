@@ -14,7 +14,7 @@ function coerceString(value: unknown, fallback: string): string {
 
 function loadEnv(): Env {
   return {
-    APP_VERSION: coerceString(import.meta.env.VITE_APP_VERSION, '0.3'),
+    APP_VERSION: coerceString(import.meta.env.VITE_APP_VERSION, '4'),
   };
 }
 

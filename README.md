@@ -4,9 +4,8 @@ A browser-only PDF compressor that automatically preserves efficient document
 pages and flattens clearly vector-heavy exports. A dedicated Figma preset keeps
 the original aggressive flattening workflow for screens and diagrams.
 
-Everything runs in the browser: Pyodide + PyMuPDF do the PDF work and Tesseract
-handles optional multilingual OCR, all inside a Web Worker. Nothing is uploaded to any
-cloud services.
+Pyodide + PyMuPDF process PDFs and Tesseract handles optional multilingual OCR
+in a browser Web Worker. Nothing is uploaded to cloud services.
 
 A Vite + React + TypeScript app, organised with a
 [bulletproof-react](https://github.com/alan2207/bulletproof-react) style
@@ -17,8 +16,8 @@ architecture.
 | Command | What it does |
 | --- | --- |
 | `npm run dev` | Vite dev server with HMR. |
-| `npm run build` | Type-check, then a normal multi-asset build into `dist/`. |
-| `npm run build:single` | Type-check, then bundle **everything local** (JS, CSS, worker) into one self-contained `dist-single/index.html`. |
+| `npm run build` | Type-check and build multiple assets into `dist/`. |
+| `npm run build:single` | Type-check and bundle all local JS, CSS, and worker code into `dist-single/index.html`. |
 | `npm run preview` / `npm run preview:single` | Serve the corresponding build output. |
 | `npm run typecheck` | `tsc -b` with no emit. |
 | `npm run lint` | ESLint (flat config, with import-boundary rules). |
@@ -74,14 +73,21 @@ Python lives in `workers/pixelpress.py` and is pulled in as a raw string
 (`import PYTHON_SOURCE from './pixelpress.py?raw'`), so it stays readable and
 lints as real Python.
 
-### Inspecting Auto decisions
+### Inspecting strategy reports
 
 Open the browser developer tools, select **Console**, and filter for
-`PixelPress strategy`. Every compression job logs a collapsed, per-page table
-showing the selected action, reason, text counts, largest-image coverage,
-content-stream size, individual document features, protection status, and each Auto threshold result. The
-report contains structural numbers only—never filenames, extracted text, page
-images, or PDF bytes.
+`PixelPress strategy`. Reports are labeled **Hybrid**, **Preserve**, or **Flatten**
+to match the requested strategy, including when using the Custom preset.
+Each report includes the document decision, detected PDF features, and a copyable
+object. When pages are analyzed, a table shows each page's compression
+strategy, reason, text counts, largest-image coverage, and protection status.
+`ocrPlanned` indicates whether OCR is planned to add searchable text, independently
+of the compression strategy. It does not confirm OCR success.
+
+Only Auto reports include decision thresholds, per-page threshold checks, and
+content-stream sizes; manual strategies do not measure content-stream complexity.
+Documents kept unchanged before page analysis have no per-page table. Reports
+never include filenames, extracted text, page images, or PDF bytes.
 
 ### State ownership
 
@@ -97,6 +103,11 @@ images, or PDF bytes.
   persisting results for 30 days. Where it is unavailable the worker falls back
   to in-memory transfer and the UI shows `Ready (M)`.
 - OCR supports English, Simplified Chinese, Traditional Chinese, Malay, and Tamil. It runs solely on pages without usable selectable text.
+- OCR adds an invisible searchable-text layer while preserving the page image.
+  It runs at 200 DPI and may tile large pages; complex layouts can affect reading
+  order and accuracy.
+- Run PDF-engine regression tests with `python3 -m unittest discover -s tests -v`
+  (PyMuPDF >= 1.26.1; OCR checks also require the `tesseract` CLI).
 - Signed PDFs are kept byte-for-byte unchanged. When compression does not beat
   the source size, PixelPress returns the original instead.
 - Requires a modern browser with module Web Workers and `SharedArrayBuffer`-free

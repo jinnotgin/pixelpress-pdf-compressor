@@ -1,6 +1,7 @@
 import { type ReactNode } from 'react';
 
 export type IconName =
+  | 'compress'
   | 'upload'
   | 'download'
   | 'trash'
@@ -13,6 +14,14 @@ export type IconName =
   | 'chevron';
 
 export const iconPaths: Record<IconName, ReactNode> = {
+  // The brand mark: a page with two arrows squeezing toward its middle.
+  compress: (
+    <>
+      <rect x="6" y="2.75" width="12" height="18.5" rx="2.5" />
+      <path d="M12 6.75v3.5m-1.7-1.7 1.7 1.7 1.7-1.7" />
+      <path d="M12 17.25v-3.5m-1.7 1.7 1.7-1.7 1.7 1.7" />
+    </>
+  ),
   upload: (
     <>
       <path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5" />

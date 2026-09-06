@@ -1,7 +1,7 @@
 {
   "name": "pixelpress",
   "private": true,
-  "version": "0.3.0",
+  "version": "4.0.0",
   "type": "module",
   "description": "Browser-only PDF compressor. All processing runs locally with Pyodide + PyMuPDF and optional Tesseract OCR.",
   "scripts": {

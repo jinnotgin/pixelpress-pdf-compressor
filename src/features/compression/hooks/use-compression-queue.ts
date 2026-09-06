@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { restoreOpfsHistory } from '../services/opfs-history';
 import { readOpfsFile } from '../services/opfs';
+import { clearLocalFiles, deleteStoredJob, type StorageUsage } from '../services/storage-usage';
 import { createPixelpressWorker, postToWorker } from '../services/worker-client';
 import {
   type Job,
@@ -9,9 +10,11 @@ import {
   type RuntimeState,
   type Settings,
   type StrategyDebugReport,
+  type WorkerFallback,
   type WorkerOutbound,
 } from '../types';
 import { intakeFiles, isRemovable } from '../utils/jobs';
+import { startProgressRamp, type ProgressRamp } from '../utils/progress-estimate';
 import { resolveSettings } from '../utils/settings';
 import { formatTextSummary } from '../utils/text-summary';
 import { useStorageEstimate } from './use-storage-estimate';
@@ -23,27 +26,49 @@ const INITIAL_RUNTIME: RuntimeState = {
 };
 
 function logStrategyDebug(report: StrategyDebugReport): void {
-  console.groupCollapsed('[PixelPress strategy] Auto decision report');
+  const isAuto = report.requestedStrategy === 'auto';
+  const strategyLabel = { auto: 'Hybrid', optimize: 'Preserve', flatten: 'Flatten' };
+  const { thresholds, pages, ...documentReport } = report;
+  const displayPages = pages.map(
+    ({ checks, contentStreamBytes, finalAction, decision, ...page }) => ({
+      ...page,
+      strategy: strategyLabel[decision],
+      ocrPlanned: finalAction === 'ocr',
+      ...(isAuto ? { contentStreamBytes, checks } : {}),
+    }),
+  );
+  console.groupCollapsed(
+    `[PixelPress strategy] ${strategyLabel[report.requestedStrategy]} strategy report`,
+  );
   console.info(report.documentReason);
   console.info('Detected PDF features:', report.documentFeatures);
-  console.info('Auto thresholds and copyable report:', report);
+  if (isAuto) console.info('Auto decision thresholds:', thresholds);
+  console.info('Copyable strategy report:', {
+    ...documentReport,
+    ...(isAuto ? { thresholds } : {}),
+    pages: displayPages,
+  });
   if (report.pages.length) {
     console.table(
       report.pages.map((page) => ({
         page: page.page,
-        action: page.finalAction,
-        decision: page.decision,
+        strategy: strategyLabel[page.decision],
+        ocrPlanned: page.finalAction === 'ocr',
         reason: page.reason,
         usableText: page.usableText,
         words: page.words,
         characters: page.characters,
         imageCoverage: `${page.largestImageCoveragePercent}%`,
-        contentBytes: page.contentStreamBytes,
         protected: page.protected,
-        imageBelow55: page.checks.imageCoverageBelow55Percent,
-        contentAtLeast220KB: page.checks.contentAtLeast220KB,
-        wordsBelow120: page.checks.fewerThan120Words,
-        contentAtLeast700KB: page.checks.contentAtLeast700KB,
+        ...(isAuto
+          ? {
+              contentBytes: page.contentStreamBytes,
+              imageBelow55: page.checks.imageCoverageBelow55Percent,
+              contentAtLeast220KB: page.checks.contentAtLeast220KB,
+              wordsBelow120: page.checks.fewerThan120Words,
+              contentAtLeast700KB: page.checks.contentAtLeast700KB,
+            }
+          : {}),
       })),
     );
   }
@@ -55,9 +80,14 @@ export interface CompressionQueue {
   runtime: RuntimeState;
   notice: Notice | null;
   storageText: string;
+  storage: StorageUsage | null;
+  refreshStorage: () => Promise<void>;
+  /** Deletes every local file kept in OPFS, and drops the results from the queue. */
+  clearStorageResults: () => Promise<void>;
   addFiles: (files: FileList | File[] | null) => void;
   downloadJob: (job: Job) => void;
   removeJob: (id: string) => void;
+  /** Stops a running job and drops it entirely — row and local files alike. */
   cancelJob: (id: string) => void;
   retryJob: (id: string) => void;
   clearFinished: () => void;
@@ -80,8 +110,11 @@ export function useCompressionQueue(settings: Settings): CompressionQueue {
   const jobsRef = useRef<Job[]>(jobs);
   const objectUrlsRef = useRef<Map<string, string>>(new Map());
   const historyRestoredRef = useRef(false);
+  const restartWorkerRef = useRef<() => void>(() => {});
+  // At most one stage is ever being estimated, because the worker blocks on it.
+  const rampRef = useRef<ProgressRamp | null>(null);
 
-  const { storageText, refresh: refreshStorage } = useStorageEstimate();
+  const { storageText, usage: storage, refresh: refreshStorage } = useStorageEstimate();
 
   useEffect(() => {
     jobsRef.current = jobs;
@@ -91,7 +124,26 @@ export function useCompressionQueue(settings: Settings): CompressionQueue {
     setJobs((current) => current.map((job) => (job.id === id ? { ...job, ...change } : job)));
   }, []);
 
+  // Progress is a backstop against the worker's phases overlapping: the bar only
+  // ever moves forward, so a phase that reports a lower percentage than the one
+  // before it just holds position instead of visibly rewinding.
+  const advanceJob = useCallback((id: string, progress: number, message: string) => {
+    setJobs((current) =>
+      current.map((job): Job =>
+        job.id === id
+          ? { ...job, status: 'processing', progress: Math.max(job.progress, progress), message }
+          : job,
+      ),
+    );
+  }, []);
+
+  const stopRamp = useCallback(() => {
+    rampRef.current?.stop();
+    rampRef.current = null;
+  }, []);
+
   const startWorker = useCallback(() => {
+    stopRamp();
     workerRef.current?.terminate();
     setRuntime(INITIAL_RUNTIME);
 
@@ -104,12 +156,27 @@ export function useCompressionQueue(settings: Settings): CompressionQueue {
         case 'runtime': {
           setRuntime({ status: data.status, message: data.message, opfs: Boolean(data.opfs) });
           if (data.status === 'error') {
-            setNotice({ kind: 'error', text: `The browser engine could not start: ${data.message}` });
+            setNotice({
+              kind: 'error',
+              text: `The browser engine could not start: ${data.message}`,
+            });
           }
           return;
         }
         case 'progress': {
-          updateJob(data.id, { status: 'processing', progress: data.progress, message: data.message });
+          // Real news always wins: whatever was being estimated has finished.
+          stopRamp();
+          advanceJob(data.id, data.progress, data.message);
+          return;
+        }
+        case 'progress-estimate': {
+          stopRamp();
+          rampRef.current = startProgressRamp({
+            from: data.from,
+            to: data.to,
+            etaMs: data.etaMs,
+            onProgress: (progress) => advanceJob(data.id, progress, data.message),
+          });
           return;
         }
         case 'warning': {
@@ -121,9 +188,12 @@ export function useCompressionQueue(settings: Settings): CompressionQueue {
           return;
         }
         case 'done': {
+          stopRamp();
           let downloadUrl: string | null = null;
           if (data.outputBuffer) {
-            downloadUrl = URL.createObjectURL(new Blob([data.outputBuffer], { type: 'application/pdf' }));
+            downloadUrl = URL.createObjectURL(
+              new Blob([data.outputBuffer], { type: 'application/pdf' }),
+            );
             objectUrlsRef.current.set(data.id, downloadUrl);
           }
           updateJob(data.id, {
@@ -142,16 +212,51 @@ export function useCompressionQueue(settings: Settings): CompressionQueue {
           return;
         }
         case 'job-error': {
+          stopRamp();
+          const job = jobsRef.current.find((candidate) => candidate.id === data.id);
+          const fallback = data.fallback;
+          if (fallback && job?.file && !job.workerFallbacks?.includes(fallback)) {
+            const fallbackMessage =
+              fallback === 'skip-ocr'
+                ? 'Restarting safely without text recognition'
+                : 'Restarting safely without embedded-image rewriting';
+            const nextFallbacks: WorkerFallback[] = [...(job.workerFallbacks ?? []), fallback];
+            setJobs((current) =>
+              current.map((candidate) =>
+                candidate.id === data.id
+                  ? {
+                      ...candidate,
+                      status: 'pending',
+                      progress: 0,
+                      message: fallbackMessage,
+                      workerFallbacks: nextFallbacks,
+                    }
+                  : candidate,
+              ),
+            );
+            processingRef.current = false;
+            activeRef.current = null;
+            worker.terminate();
+            if (workerRef.current === worker) workerRef.current = null;
+            setRuntime({
+              status: 'loading',
+              message: 'Restarting browser engine for a safe retry',
+              opfs: false,
+            });
+            queueMicrotask(() => restartWorkerRef.current());
+            return;
+          }
           updateJob(data.id, { status: 'error', message: data.message, progress: 0 });
           processingRef.current = false;
           activeRef.current = null;
           worker.terminate();
           if (workerRef.current === worker) workerRef.current = null;
           setRuntime({
-            status: 'error',
-            message: 'Browser engine will restart before retrying',
+            status: 'loading',
+            message: 'Restarting browser engine',
             opfs: false,
           });
+          queueMicrotask(() => restartWorkerRef.current());
           return;
         }
       }
@@ -159,6 +264,7 @@ export function useCompressionQueue(settings: Settings): CompressionQueue {
 
     worker.onerror = (event) => {
       console.error('PixelPress worker error', event.message, event.filename, event.lineno);
+      stopRamp();
       const id = activeRef.current;
       if (id) {
         updateJob(id, {
@@ -171,19 +277,21 @@ export function useCompressionQueue(settings: Settings): CompressionQueue {
       activeRef.current = null;
       setRuntime({ status: 'error', message: 'Browser engine stopped', opfs: false });
     };
-  }, [updateJob]);
+  }, [advanceJob, updateJob, stopRamp]);
+
+  restartWorkerRef.current = startWorker;
 
   const restoreHistory = useCallback(async () => {
     const restored = await restoreOpfsHistory();
     if (restored.length) setJobs((current) => [...current, ...restored]);
-    refreshStorage();
+    await refreshStorage();
   }, [refreshStorage]);
 
   // Boot the worker; restore history exactly once even under StrictMode's
   // double-invoke (appending restored jobs is not idempotent).
   useEffect(() => {
     startWorker();
-    refreshStorage();
+    void refreshStorage();
     if (!historyRestoredRef.current) {
       historyRestoredRef.current = true;
       void restoreHistory();
@@ -191,6 +299,7 @@ export function useCompressionQueue(settings: Settings): CompressionQueue {
 
     const urls = objectUrlsRef.current;
     return () => {
+      rampRef.current?.stop();
       workerRef.current?.terminate();
       urls.forEach((url) => URL.revokeObjectURL(url));
     };
@@ -204,12 +313,17 @@ export function useCompressionQueue(settings: Settings): CompressionQueue {
 
     processingRef.current = true;
     activeRef.current = next.id;
-    updateJob(next.id, { status: 'processing', progress: 1, message: 'Sending file to the local worker' });
+    updateJob(next.id, {
+      status: 'processing',
+      progress: 1,
+      message: 'Sending file to the local worker',
+    });
     postToWorker(workerRef.current, {
       type: 'process',
       id: next.id,
       file: next.file,
       settings: next.settings,
+      fallbacks: next.workerFallbacks,
     });
   }, [jobs, runtime.status, updateJob]);
 
@@ -260,36 +374,70 @@ export function useCompressionQueue(settings: Settings): CompressionQueue {
     setJobs((current) => current.filter((job) => job.id !== id));
   }, []);
 
+  // A cancelled run leaves nothing worth keeping, so the job goes away for good:
+  // the worker mid-write is terminated, the row disappears, and the folder it
+  // was filling is deleted once the terminate has released its file handles.
   const cancelJob = useCallback(
     (id: string) => {
-      if (activeRef.current !== id) return;
-      workerRef.current?.terminate();
-      processingRef.current = false;
-      activeRef.current = null;
-      updateJob(id, {
-        status: 'cancelled',
-        message: 'Cancelled, partial local files can be removed',
-        progress: 0,
-      });
-      startWorker();
+      const active = activeRef.current === id;
+      if (active) {
+        workerRef.current?.terminate();
+        workerRef.current = null;
+        processingRef.current = false;
+        activeRef.current = null;
+      }
+
+      const url = objectUrlsRef.current.get(id);
+      if (url) {
+        URL.revokeObjectURL(url);
+        objectUrlsRef.current.delete(id);
+      }
+      setJobs((current) => current.filter((job) => job.id !== id));
+
+      if (active) startWorker();
+      void deleteStoredJob(id).then(refreshStorage);
     },
-    [startWorker, updateJob],
+    [refreshStorage, startWorker],
   );
 
   const retryJob = useCallback(
     (id: string) => {
-      updateJob(id, { status: 'pending', message: 'Waiting to retry', progress: 0 });
-      startWorker();
+      updateJob(id, {
+        status: 'pending',
+        message: runtime.status === 'ready' ? 'Waiting to retry' : 'Waiting for the browser engine',
+        progress: 0,
+      });
+      if (runtime.status === 'error' || !workerRef.current) startWorker();
     },
-    [startWorker, updateJob],
+    [runtime.status, startWorker, updateJob],
   );
 
+  // Quota accounting settles a moment after a delete lands, so an estimate taken
+  // straight afterwards can still report the bytes that just went away.
+  const refreshAfterClear = useCallback(async () => {
+    await refreshStorage();
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    await refreshStorage();
+  }, [refreshStorage]);
+
+  // Wipes the whole OPFS tree rather than one folder at a time, so the callers
+  // must keep it out of reach while a job is still writing into it.
+  const clearStorageResults = useCallback(async () => {
+    await clearLocalFiles();
+    objectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+    objectUrlsRef.current.clear();
+    setJobs((current) => current.filter((job) => !isRemovable(job.status)));
+    await refreshAfterClear();
+  }, [refreshAfterClear]);
+
   const clearFinished = useCallback(() => {
-    jobsRef.current.filter((job) => isRemovable(job.status)).forEach((job) => {
-      const url = objectUrlsRef.current.get(job.id);
-      if (url) URL.revokeObjectURL(url);
-      if (workerRef.current) postToWorker(workerRef.current, { type: 'remove', id: job.id });
-    });
+    jobsRef.current
+      .filter((job) => isRemovable(job.status))
+      .forEach((job) => {
+        const url = objectUrlsRef.current.get(job.id);
+        if (url) URL.revokeObjectURL(url);
+        if (workerRef.current) postToWorker(workerRef.current, { type: 'remove', id: job.id });
+      });
     setJobs((current) => current.filter((job) => !isRemovable(job.status)));
     objectUrlsRef.current.clear();
   }, []);
@@ -299,6 +447,9 @@ export function useCompressionQueue(settings: Settings): CompressionQueue {
     runtime,
     notice,
     storageText,
+    storage,
+    refreshStorage,
+    clearStorageResults,
     addFiles,
     downloadJob,
     removeJob,

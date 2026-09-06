@@ -5,20 +5,32 @@ import { DEFAULT_SETTINGS, normalizeStoredSettings, resolveSettings } from './se
 
 describe('resolveSettings', () => {
   it('expands the auto preset to a fixed automatic recipe', () => {
-    const resolved = resolveSettings({ ...DEFAULT_SETTINGS, preset: 'auto', dpi: 300 });
-    expect(resolved).toMatchObject({ preset: 'auto', strategy: 'auto', dpi: 96, jpegQuality: 78 });
+    const resolved = resolveSettings({
+      ...DEFAULT_SETTINGS,
+      preset: 'auto',
+      flattenDpi: 300,
+      imageDetail: 'print',
+    });
+    expect(resolved).toMatchObject({
+      preset: 'auto',
+      strategy: 'auto',
+      flattenDpi: 96,
+      imageDetail: 'screen',
+      jpegQuality: 85,
+    });
   });
 
   it('expands the Figma preset to a fixed flatten recipe', () => {
     const resolved = resolveSettings({ ...DEFAULT_SETTINGS, preset: 'figma', strategy: 'optimize' });
-    expect(resolved).toMatchObject({ preset: 'figma', strategy: 'flatten', dpi: 96 });
+    expect(resolved).toMatchObject({ preset: 'figma', strategy: 'flatten', flattenDpi: 96 });
   });
 
   it('passes custom values through untouched', () => {
     const custom: Settings = {
       preset: 'custom',
       strategy: 'optimize',
-      dpi: 133,
+      flattenDpi: 133,
+      imageDetail: 'compact',
       jpegQuality: 61,
       recognizeText: false,
       ocrLanguage: 'tam',
@@ -61,8 +73,20 @@ describe('normalizeStoredSettings', () => {
     expect(normalizeStoredSettings({ ocrLanguage: 'msa' }).ocrLanguage).toBe('msa');
   });
 
-  it('migrates the retired presets', () => {
-    expect(normalizeStoredSettings({ preset: 'high' }).preset).toBe('figma');
-    expect(normalizeStoredSettings({ preset: 'balanced' }).preset).toBe('auto');
+  it('keeps stored resolutions and image steps', () => {
+    const result = normalizeStoredSettings({ flattenDpi: 96, imageDetail: 'print' });
+    expect(result.flattenDpi).toBe(96);
+    expect(result.imageDetail).toBe('print');
+  });
+
+  it('falls back to the default image step for an unknown one', () => {
+    expect(normalizeStoredSettings({ imageDetail: 'ultra' }).imageDetail).toBe(
+      DEFAULT_SETTINGS.imageDetail,
+    );
+  });
+
+  it('falls back to the default preset for a retired one', () => {
+    expect(normalizeStoredSettings({ preset: 'high' }).preset).toBe(DEFAULT_SETTINGS.preset);
+    expect(normalizeStoredSettings({ preset: 'balanced' }).preset).toBe(DEFAULT_SETTINGS.preset);
   });
 });
