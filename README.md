@@ -111,8 +111,9 @@ never include filenames, extracted text, page images, or PDF bytes.
   images use JPEG; transparent images retain lossless colour and soft masks.
   Low-DPI images can be recompressed at their existing dimensions; the detail
   threshold controls resizing only.
-  Bitonal images (including black/white pixels stored as RGB), special masks,
-  unsupported encodings and special colour spaces are preserved. Replacements
+  Bitonal images (including black/white pixels stored as RGB) are packed into
+  compact 1-bit Flate PNGs; special masks, unsupported encodings and special
+  colour spaces are preserved. Replacements
   must reduce image storage size; this is deliberately not full parity with
   MuPDF's format-specific image rewriter.
 - Run PDF-engine regression tests with `python3 -m unittest discover -s tests -v`

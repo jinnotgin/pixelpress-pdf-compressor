@@ -1,6 +1,7 @@
 import json
 import math
 import os
+import struct
 import zlib
 import pymupdf
 
@@ -10,6 +11,30 @@ _PP_MAX_OCR_PIXELS = 24_000_000
 # Recognition images are transient and never enter the output PDF. Keep
 # JPEG quality high to avoid sacrificing text recognition accuracy.
 _PP_OCR_JPEG_QUALITY = 92
+
+
+def _pp_bitonal_png(pix):
+    """Encode a black/white pixmap as a compact 1-bit grayscale PNG."""
+    if pix.alpha or not pix.colorspace or pix.colorspace.n != 1:
+        return None
+    rows = bytearray()
+    row_bytes = (pix.width + 7) // 8
+    for y in range(pix.height):
+        rows.append(0)  # PNG filter: none
+        row = pix.samples[y * pix.stride : y * pix.stride + pix.width]
+        packed = bytearray(row_bytes)
+        for x, value in enumerate(row):
+            if value >= 128:
+                packed[x // 8] |= 1 << (7 - (x % 8))
+        rows.extend(packed)
+
+    def chunk(kind, payload):
+        return (struct.pack(">I", len(payload)) + kind + payload +
+                struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF))
+
+    header = struct.pack(">IIBBBBB", pix.width, pix.height, 1, 0, 0, 0, 0)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) +
+            chunk(b"IDAT", zlib.compress(bytes(rows), 9)) + chunk(b"IEND", b""))
 
 def pp_open(job_id, input_path, settings_json):
     settings = json.loads(settings_json)
@@ -73,7 +98,7 @@ def _pp_plan_images(document, dpi):
                 mask_xrefs.add(smask)
             # Newly inserted PNGs may be stored as uncompressed PDF samples.
             supported = image[8] in ("", "FlateDecode", "LZWDecode", "RunLengthDecode", "DCTDecode")
-            if xref <= 0 or not supported or image[4] == 1:
+            if xref <= 0 or not supported:
                 continue
             if xref not in images:
                 if image[5] not in ("DeviceRGB", "DeviceGray", "ICCBased", "DeviceCMYK"):
@@ -136,9 +161,22 @@ def _pp_rewrite_image(document, info, dpi, quality):
         if not bitonal:
             pix = pymupdf.Pixmap(pix, 0)
     if bitonal:
-        # Preserve scan/line-art edges. Do not replace MuPDF's fax/bitonal
-        # treatment with JPEG or turn sharp 1-bit content into gray samples.
-        return False
+        # Preserve scan/line-art edges. A 1-bit PNG uses Flate compression and
+        # avoids turning sharp black/white content into lossy JPEG gray samples.
+        if pix.colorspace.n != 1:
+            pix = pymupdf.Pixmap(pymupdf.csGRAY, pix)
+        bitonal_png = _pp_bitonal_png(pix)
+        if bitonal_png is None:
+            return False
+        original_size = len(document.xref_stream_raw(xref))
+        if len(bitonal_png) >= original_size:
+            return False
+        scratch = document.new_page()
+        try:
+            scratch.replace_image(xref, stream=bitonal_png)
+        finally:
+            document.delete_page(len(document) - 1)
+        return True
     mask = None
     if info["smask"]:
         mask = pymupdf.Pixmap(document, info["smask"])

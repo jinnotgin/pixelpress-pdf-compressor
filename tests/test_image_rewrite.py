@@ -200,9 +200,30 @@ class ImageRewriteTests(unittest.TestCase):
                 pix = pymupdf.Pixmap(cs, 64, 64, samples, False)
                 page = doc.new_page()
                 xref = page.insert_image(pymupdf.Rect(0, 0, 16, 16), pixmap=pix)
-                original = doc.xref_object(xref), doc.xref_stream_raw(xref)
                 pp._pp_downsample_images(doc, 72, 20)
-                self.assertEqual((doc.xref_object(xref), doc.xref_stream_raw(xref)), original)
+                self.assertEqual(doc.xref_get_key(xref, "BitsPerComponent")[1], "1")
+                self.assertNotEqual(doc.xref_get_key(xref, "Filter")[1], "/DCTDecode")
+
+    def test_bitonal_image_can_use_compact_one_bit_png(self):
+        with pymupdf.open() as doc:
+            # A large, sparse line-art image benefits substantially from packed
+            # 1-bit rows compared with its original 8-bit Flate representation.
+            samples = bytearray(1200 * 900)
+            for y in range(900):
+                for x in range(1200):
+                    if x == y or x == 1199 - y or x % 97 == 0:
+                        samples[y * 1200 + x] = 255
+            pix = pymupdf.Pixmap(pymupdf.csGRAY, 1200, 900, bytes(samples), False)
+            page = doc.new_page(width=600, height=450)
+            xref = page.insert_image(page.rect, stream=pix.tobytes("png"))
+            original = len(doc.xref_stream_raw(xref))
+            plan = pp._pp_plan_images(doc, 72)["images"]
+            self.assertEqual(len(plan), 1)
+            encoded = pp._pp_bitonal_png(pix)
+            self.assertLess(len(encoded), original)
+            self.assertTrue(pp._pp_rewrite_image(doc, plan[0], 72, 78))
+            self.assertNotEqual(doc.xref_get_key(xref, "Filter")[1], "/DCTDecode")
+            self.assertEqual(doc.xref_get_key(xref, "BitsPerComponent")[1], "1")
 
     def test_continuous_grayscale_stays_grayscale(self):
         with pymupdf.open() as doc:
