@@ -1,7 +1,10 @@
+import io
 import json
 import math
 import os
+import zlib
 import pymupdf
+from PIL import Image, features
 
 _PP_JOBS = {}
 _PP_TILE_PX = 3072
@@ -9,6 +12,90 @@ _PP_MAX_OCR_PIXELS = 24_000_000
 # Recognition images are transient and never enter the output PDF. Keep
 # JPEG quality high to avoid sacrificing text recognition accuracy.
 _PP_OCR_JPEG_QUALITY = 92
+_PP_MAX_CODEC_PIXELS = 24_000_000
+_PP_IMAGE_SAVE_OPTIONS = dict(garbage=4, deflate=True, deflate_images=True,
+                             deflate_fonts=True, use_objstms=True,
+                             compression_effort=60, clean=False)
+
+
+def _pp_bitonal_png(pix):
+    """Pack exact black/white samples in native code, reading samples once."""
+    if pix.alpha or not pix.colorspace or pix.colorspace.n != 1:
+        return None
+    with Image.frombytes("L", (pix.width, pix.height), pix.samples) as image:
+        with image.convert("1", dither=Image.Dither.NONE) as packed:
+            data = io.BytesIO()
+            packed.save(data, format="PNG")
+            return data.getvalue()
+
+
+def _pp_image_kind(pix):
+    """Classify exact gray/bitonal content using bounded copies of pixel rows."""
+    samples = pix.samples_mv
+    bitonal = True
+    rows = max(1, 1_048_576 // pix.stride)
+    for y in range(0, pix.height, rows):
+        data = bytes(samples[y * pix.stride : min(y + rows, pix.height) * pix.stride])
+        if pix.n == 3:
+            red = data[0::3]
+            if red != data[1::3] or red != data[2::3]:
+                return "color"
+            data = red
+        elif pix.n != 1:
+            return "color"
+        if data.translate(None, b"\x00\xff"):
+            bitonal = False
+    return "bitonal" if bitonal else "gray"
+
+
+def _pp_image_storage(document, xref, include_mask=True):
+    """Stored image bytes, including dictionaries and its optional soft mask."""
+    refs = [xref]
+    kind, mask = document.xref_get_key(xref, "SMask")
+    if include_mask and kind == "xref":
+        refs.append(int(mask.split()[0]))
+    size = 0
+    for ref in refs:
+        data = document.xref_stream_raw(ref)
+        if document.xref_get_key(ref, "Filter")[0] == "null":
+            # save(deflate=True) also compresses pre-existing unfiltered data.
+            data = zlib.compress(data)
+        size += len(data) + len(document.xref_object(ref).encode("utf-8"))
+    return size
+
+
+def _pp_image_candidate(replacement=None, pdf=None, lossless=True):
+    """Let the libraries build and save the candidate before comparing sizes."""
+    with pymupdf.open(stream=pdf, filetype="pdf") if pdf else pymupdf.open() as probe:
+        if pdf is None:
+            page = probe.new_page()
+            page.insert_image(page.rect, **replacement)
+        encoded = probe.tobytes(**_PP_IMAGE_SAVE_OPTIONS)
+    with pymupdf.open(stream=encoded, filetype="pdf") as saved:
+        xref = saved[0].get_images()[0][0]
+        size = _pp_image_storage(saved, xref)
+    return {"pdf": encoded, "size": size, "lossless": lossless}
+
+
+def _pp_apply_image_candidate(document, xref, candidate):
+    """Replace a whole library-built image; never hand-edit /Image fields.
+
+    Import the complete image and use the same documented xref_copy primitive
+    used inside Page.replace_image, preserving every mask/codec reference.
+    Import also avoids insert_image's digest cache returning the original xref
+    for identical pixels, which would make replace_image copy an object onto
+    itself. The serialized candidate is exactly what was size-checked.
+    """
+    pages = len(document)
+    try:
+        with pymupdf.open(stream=candidate["pdf"], filetype="pdf") as probe:
+            document.insert_pdf(probe)
+        new_xref = document[pages].get_images()[0][0]
+        if new_xref != xref:
+            document.xref_copy(new_xref, xref)
+    finally:
+        if len(document) > pages:
+            document.delete_pages(from_page=pages, to_page=len(document) - 1)
 
 def pp_open(job_id, input_path, settings_json):
     settings = json.loads(settings_json)
@@ -54,15 +141,14 @@ def pp_open(job_id, input_path, settings_json):
         "tagged": tagged,
     })
 
-def _pp_plan_lossless_images(document, dpi):
+def _pp_plan_images(document, dpi):
     """
-    Inspect every image placement and return the lossless rasters worth
-    rewriting, each tagged with the lowest DPI it is drawn at. `embedded` counts
-    every placement in the document, which is roughly the work the native lossy
-    pass will do afterwards.
+    Inspect supported rasters once, retaining their lowest placement DPI.
+    Unsupported encodings, stencil masks and special colour spaces stay intact.
     """
     images = {}
     mask_xrefs = set()
+    mask_owners = {}
     embedded = 0
     # Inspect every placement before replacing anything: replacement is global,
     # and a shared image must retain enough pixels for its largest placement.
@@ -72,11 +158,18 @@ def _pp_plan_lossless_images(document, dpi):
             xref, smask = image[:2]
             if smask:
                 mask_xrefs.add(smask)
+                mask_owners.setdefault(smask, set()).add(xref)
             # Newly inserted PNGs may be stored as uncompressed PDF samples.
-            lossless = image[8] in ("", "FlateDecode", "LZWDecode", "RunLengthDecode")
-            if xref <= 0 or not lossless or image[4] == 1:
+            supported = image[8] in ("", "FlateDecode", "LZWDecode", "RunLengthDecode",
+                                    "DCTDecode", "CCITTFaxDecode")
+            if xref <= 0 or not supported:
                 continue
             if xref not in images:
+                if image[5] not in ("DeviceRGB", "DeviceGray", "ICCBased", "DeviceCMYK"):
+                    continue
+                # Matte requires unblending colours before changing the mask.
+                if smask and document.xref_get_key(smask, "Matte")[0] != "null":
+                    continue
                 # Explicit /Mask and stencil masks need different treatment from
                 # /SMask. Preserve those images rather than discard transparency.
                 if document.xref_get_key(xref, "Mask")[0] != "null":
@@ -96,79 +189,138 @@ def _pp_plan_lossless_images(document, dpi):
 
     # A soft mask only surfaces on the page that uses it, so eligibility can
     # only be decided once every page has been walked.
-    threshold = max(int(dpi) + 1, round(int(dpi) * 1.15))
+    # Resolution gates resizing, not recompression: even low-DPI JPEGs can
+    # contain substantial savings without changing their pixel dimensions.
     eligible = [
         info for xref, info in images.items()
         if xref not in mask_xrefs
         and math.isfinite(info["dpi"])
-        and info["dpi"] >= threshold
     ]
+    for info in eligible:
+        info["shared_mask"] = len(mask_owners.get(info["smask"], ())) > 1
     return {"images": eligible, "embedded": embedded}
 
 
-def _pp_rewrite_lossless_image(document, info, dpi, quality):
+def _pp_rewrite_image(document, info, dpi, quality):
     """Shrink and recompress one planned raster. False means it was left alone."""
     xref = info["xref"]
     effective_dpi = info["dpi"]
     pix = pymupdf.Pixmap(document, xref)
     if pix.colorspace is None:
         return False
-    if info["smask"]:
-        if pix.alpha:
-            pix = pymupdf.Pixmap(pix, 0)
-        mask = pymupdf.Pixmap(document, info["smask"])
-        pix = pymupdf.Pixmap(pix, mask)
-        del mask
-    factor = 0
-    while effective_dpi / (2 ** (factor + 1)) > dpi:
-        factor += 1
-    if factor:
-        # Shrink color and alpha together to keep mask dimensions aligned.
-        pix.shrink(factor)
-    page = document.load_page(info["page"])
     if pix.alpha:
-        page.replace_image(xref, pixmap=pix)
+        # Embedded alpha needs separate treatment (e.g. JPEG 2000).
+        return False
+    # Resolve ICC / CMYK colours before classification, retaining grayscale.
+    pix = pymupdf.Pixmap(pymupdf.csGRAY if pix.colorspace.n == 1 else pymupdf.csRGB, pix)
+    image_kind = _pp_image_kind(pix)
+    if image_kind != "color" and pix.colorspace.n != 1:
+        pix = pymupdf.Pixmap(pymupdf.csGRAY, pix)
+    mask = None
+    if info["smask"]:
+        mask = pymupdf.Pixmap(document, info["smask"])
+        if (mask.width, mask.height) != (pix.width, pix.height) or mask.n != 1:
+            return False
+    factor = 0
+    threshold = max(int(dpi) + 1, round(int(dpi) * 1.15))
+    # Keep black/white line art at its original resolution and never threshold
+    # or dither continuous grayscale into a scan codec.
+    if image_kind != "bitonal" and effective_dpi >= threshold:
+        while effective_dpi / (2 ** (factor + 1)) > dpi:
+            factor += 1
+    original_size = _pp_image_storage(document, xref,
+                                      include_mask=not info.get("shared_mask", False))
+    # Only retain the best candidate, keeping transient memory bounded.
+    best = None
+
+    def consider(candidate):
+        nonlocal best
+        # Dictionary/compression bookkeeping differs slightly between saves.
+        if candidate["size"] + 32 >= original_size:
+            return
+        if best is None:
+            best = candidate
+        elif candidate["lossless"] == best["lossless"]:
+            if candidate["size"] < best["size"]:
+                best = candidate
+        elif candidate["lossless"]:
+            if candidate["size"] <= best["size"] * 1.10:
+                best = candidate
+        elif candidate["size"] * 1.10 < best["size"]:
+            best = candidate
+
+    extra_codecs = pix.width * pix.height <= _PP_MAX_CODEC_PIXELS
+    if mask is not None:
+        if factor:
+            # Premultiply before shrinking to avoid coloured fringes at alpha
+            # edges; PNG export restores straight colour for JPEG encoding.
+            combined = pymupdf.Pixmap(pix, mask)
+            combined.shrink(factor)
+            png = combined.tobytes("png")
+            consider(_pp_image_candidate({"stream": png}))
+            if extra_codecs and image_kind != "bitonal":
+                with Image.open(io.BytesIO(png)) as rgba:
+                    alpha = io.BytesIO()
+                    with rgba.getchannel("A") as channel:
+                        channel.save(alpha, format="PNG")
+                    jpeg = io.BytesIO()
+                    # Full chroma is deliberate, unlike the opaque paths that
+                    # take MuPDF's 4:2:0 default. Straight colour is meaningless
+                    # where alpha is zero, and a 4:2:0 sample straddling the
+                    # boundary mixes it into visible edge pixels, rimming the
+                    # cut-out. Measured on a hard-edged shape, 4:2:0 doubles
+                    # mean edge error (20.2 vs 10.3) and leaves the interior
+                    # alone; full chroma costs well under 1% of output size.
+                    with rgba.convert("L" if image_kind == "gray" else "RGB") as color:
+                        color.save(jpeg, format="JPEG", quality=int(quality), subsampling=0)
+                consider(_pp_image_candidate({"stream": jpeg.getvalue(),
+                                               "mask": alpha.getvalue()}, lossless=False))
+        else:
+            # Keeping masks separate preserves exact alpha samples without a
+            # premultiply/unpremultiply round trip when no resizing is needed.
+            alpha = mask.tobytes("png")
+            if extra_codecs:
+                consider(_pp_image_candidate({"stream": pix.tobytes("png"), "mask": alpha}))
+                if image_kind != "bitonal":
+                    consider(_pp_image_candidate({"stream": pix.tobytes("jpeg", jpg_quality=int(quality)),
+                                                   "mask": alpha}, lossless=False))
+    elif image_kind == "bitonal":
+        if not extra_codecs:
+            return False
+        consider(_pp_image_candidate({"stream": _pp_bitonal_png(pix)}))
+        if features.check("libtiff"):
+            with Image.frombytes("L", (pix.width, pix.height), pix.samples) as gray:
+                with gray.convert("1", dither=Image.Dither.NONE) as packed:
+                    # Pillow's PDF writer builds a complete CCITT Group 4 image.
+                    # Importing a TIFF instead would decode it back to raw bits.
+                    fax = io.BytesIO()
+                    packed.save(fax, format="PDF")
+            consider(_pp_image_candidate(pdf=fax.getvalue()))
     else:
-        if pix.colorspace.n not in (1, 3):
-            pix = pymupdf.Pixmap(pymupdf.csRGB, pix)
-        page.replace_image(xref, stream=pix.tobytes("jpeg", jpg_quality=int(quality)))
-    del pix
+        if factor:
+            # A fresh pixmap avoids stale samples views in older PyMuPDF.
+            pix = pymupdf.Pixmap(pix, 0)
+            pix.shrink(factor)
+        consider(_pp_image_candidate({"stream": pix.tobytes("jpeg", jpg_quality=int(quality))},
+                                       lossless=False))
+        if extra_codecs:
+            consider(_pp_image_candidate({"pixmap": pix}))
+    if best is None:
+        return False
+    _pp_apply_image_candidate(document, xref, best)
     return True
 
 
-def _pp_rewrite_lossless_images(document, dpi, quality):
-    """Rewrite lossless rasters once, using their lowest DPI across placements."""
-    for info in _pp_plan_lossless_images(document, dpi)["images"]:
-        _pp_rewrite_lossless_image(document, info, dpi, quality)
-
-
 def _pp_downsample_images(document, dpi, quality):
-    """
-    Shrink embedded rasters towards `dpi`, then recompress them at `quality`.
-    `dpi` is a floor: the pass halves while the result stays above it, so an
-    image it cannot halve is still recompressed. The threshold sits just above
-    the floor so images already at or below it are left alone entirely.
-    """
-    # PyMuPDF 1.27 / MuPDF bug 709168 can crash while rewriting shared lossless
-    # images. Replace them individually, including their soft masks, then leave
-    # lossless images out of the native pass. See PyMuPDF issue #4918:
-    # https://github.com/pymupdf/PyMuPDF/issues/4918#issuecomment-3966417965
-    # TODO: Once Pyodide ships PyMuPDF >= 1.28 (with MuPDF >= 1.28), remove
-    # _pp_rewrite_lossless_images and restore the simpler lossless=True call.
-    _pp_rewrite_lossless_images(document, dpi, quality)
-    _pp_rewrite_lossy_images(document, dpi, quality)
+    """Rewrite supported shared rasters individually, preserving the DPI floor.
 
+    Avoid Document.rewrite_images entirely: MuPDF issue 709168 / PyMuPDF #4918
+    can trap the WebAssembly runtime while traversing shared images, including
+    JPEGs. Unsupported images remain unchanged; text and vectors stay intact.
+    """
+    for info in _pp_plan_images(document, dpi)["images"]:
+        _pp_rewrite_image(document, info, dpi, quality)
 
-def _pp_rewrite_lossy_images(document, dpi, quality):
-    """PyMuPDF's own pass over already-lossy rasters. Opaque and uninterruptible."""
-    document.rewrite_images(
-        dpi_threshold=max(int(dpi) + 1, round(int(dpi) * 1.15)),
-        dpi_target=int(dpi),
-        quality=int(quality),
-        lossy=True,
-        lossless=False,
-        bitonal=True,
-    )
 
 def _pp_copy_page_links(source_page, target_page):
     copied = 0
@@ -691,7 +843,7 @@ def pp_begin_finalize(job_id, image_dpi):
     embedded = 0
     if job["image_dpi"]:
         try:
-            plan = _pp_plan_lossless_images(output, job["image_dpi"])
+            plan = _pp_plan_images(output, job["image_dpi"])
         except Exception as error:
             _pp_handle_finalize_error(job, error)
         else:
@@ -715,7 +867,7 @@ def pp_optimize_image(job_id, index):
     if index >= len(plan):
         return json.dumps({"stopped": True, "changed": False})
     try:
-        changed = _pp_rewrite_lossless_image(
+        changed = _pp_rewrite_image(
             job["output"],
             plan[index],
             job["image_dpi"],
@@ -727,36 +879,10 @@ def pp_optimize_image(job_id, index):
     return json.dumps({"stopped": False, "changed": bool(changed)})
 
 
-def pp_optimize_images_natively(job_id):
-    """
-    PyMuPDF's own lossy pass over the remaining rasters. A single blocking call
-    with no progress inside it, so the caller estimates its duration instead.
-    """
-    job = _PP_JOBS[job_id]
-    dpi = job.get("image_dpi") or 0
-    if not dpi:
-        return json.dumps({"ran": False})
-    try:
-        _pp_rewrite_lossy_images(job["output"], int(dpi), int(job["settings"]["jpegQuality"]))
-    except Exception as error:
-        _pp_handle_finalize_error(job, error)
-        return json.dumps({"ran": False})
-    return json.dumps({"ran": True})
-
-
 def pp_save_output(job_id, output_path):
     """Write and verify the PDF, reporting every warning finalisation collected."""
     job = _PP_JOBS[job_id]
-    job["output"].save(
-        output_path,
-        garbage=4,
-        deflate=True,
-        deflate_images=True,
-        deflate_fonts=True,
-        use_objstms=True,
-        compression_effort=60,
-        clean=False,
-    )
+    job["output"].save(output_path, **_PP_IMAGE_SAVE_OPTIONS)
     with pymupdf.open(output_path) as verification:
         if len(verification) != job["pages"]:
             raise RuntimeError("The output page count did not match the source PDF.")

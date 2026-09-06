@@ -8,7 +8,11 @@ function errorMessage(error: unknown): string {
 
 export function isRuntimeBoundsTrap(error: unknown): boolean {
   const message = errorMessage(error).toLowerCase();
-  return message.includes('index out of bounds') || message.includes('out of bounds memory access');
+  return (
+    message.includes('index out of bounds') ||
+    message.includes('out of bounds memory access') ||
+    message.includes('memory access out of bounds')
+  );
 }
 
 export function recoveryForFatalError(

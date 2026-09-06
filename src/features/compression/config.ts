@@ -96,7 +96,6 @@ export const STAGE_ESTIMATE_MS = {
   /** Finalisation. */
   imagePerImage: 600,
   nativeBase: 40,
-  nativePerImage: 100,
   saveBase: 25,
 } as const;
 

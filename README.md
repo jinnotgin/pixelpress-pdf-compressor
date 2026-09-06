@@ -106,8 +106,29 @@ never include filenames, extracted text, page images, or PDF bytes.
 - OCR adds an invisible searchable-text layer while preserving the page image.
   It runs at 200 DPI and may tile large pages; complex layouts can affect reading
   order and accuracy.
+- Embedded images are processed once per shared image. Complete candidates are
+  constructed and saved by PyMuPDF/Pillow, imported, and copied using the same
+  documented `xref_copy` operation used by `Page.replace_image`. No `/Image`
+  dictionaries are hand-edited, and the native whole-document rewriter is avoided.
+  JPEG and lossless candidates compete on saved image storage; lossless wins
+  when within 10% of JPEG. Transparent photographs can use JPEG colour with a
+  separate lossless soft mask; resizing samples premultiplied colour and alpha
+  together to avoid fringes. Black/white content keeps its original resolution
+  and compares packed Flate with CCITT Group 4 (when libtiff is available).
+  Low-DPI images can be recompressed at their existing dimensions; the detail
+  threshold controls resizing only.
+  Additional codec candidates are limited to 24 megapixels to bound transient
+  memory. Larger opaque images retain JPEG recompression; some larger masked
+  images are preserved. Special masks, unsupported encodings and special colour
+  spaces are preserved. Candidates must reduce saved image storage, accounting
+  conservatively for shared masks. This is not full parity with MuPDF's rewriter.
 - Run PDF-engine regression tests with `python3 -m unittest discover -s tests -v`
-  (PyMuPDF >= 1.26.1; OCR checks also require the `tesseract` CLI).
+  (PyMuPDF >= 1.26.1 and Pillow >= 11; OCR checks also require the `tesseract` CLI).
+  The worker loads both PyMuPDF and Pillow from the pinned Pyodide distribution.
+  Run `node tests/run_pyodide.mjs` with the matching `pyodide` npm package installed
+  to check image/finalisation tests in WebAssembly. `PYODIDE_MODULE` can point to
+  an external `pyodide.mjs` installation, and `PYODIDE_PACKAGE_CACHE` selects its
+  downloaded wheel cache. The runner verifies the version against app config.
 - Signed PDFs are kept byte-for-byte unchanged. When compression does not beat
   the source size, PixelPress returns the original instead.
 - Requires a modern browser with module Web Workers and `SharedArrayBuffer`-free
