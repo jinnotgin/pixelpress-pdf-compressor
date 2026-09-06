@@ -14,7 +14,9 @@ function coerceString(value: unknown, fallback: string): string {
 
 function loadEnv(): Env {
   return {
-    APP_VERSION: coerceString(import.meta.env.VITE_APP_VERSION, '5'),
+    // `__APP_VERSION__` is injected from package.json at build time (see
+    // vite.config.ts); the env var stays available as a deploy-time override.
+    APP_VERSION: coerceString(import.meta.env.VITE_APP_VERSION, __APP_VERSION__),
   };
 }
 

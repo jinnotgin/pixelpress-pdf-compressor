@@ -1,7 +1,13 @@
+import { readFileSync } from 'node:fs';
 import { fileURLToPath, URL } from 'node:url';
 
 import react from '@vitejs/plugin-react';
 import { defineConfig, type ViteUserConfig } from 'vitest/config';
+
+/** Single source of truth for the app version: package.json. */
+const { version: appVersion } = JSON.parse(
+  readFileSync(fileURLToPath(new URL('./package.json', import.meta.url)), 'utf8'),
+) as { version: string };
 
 /**
  * Base build. Emits a normal multi-asset bundle into `dist/`.
@@ -15,6 +21,9 @@ export const baseConfig: ViteUserConfig = {
   // GitHub Pages workflow so asset URLs resolve under the project subpath.
   base: process.env.BASE_PATH || '/',
   plugins: [react()],
+  define: {
+    __APP_VERSION__: JSON.stringify(appVersion),
+  },
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),
