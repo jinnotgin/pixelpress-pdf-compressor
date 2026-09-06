@@ -4,10 +4,14 @@ import { fileURLToPath, URL } from 'node:url';
 import react from '@vitejs/plugin-react';
 import { defineConfig, type ViteUserConfig } from 'vitest/config';
 
-/** Single source of truth for the app version: package.json. */
-const { version: appVersion } = JSON.parse(
+/**
+ * Single source of truth for the app version: package.json. The footer shows
+ * the major only (`v5`, not `v5.0.0`), so patch bumps don't churn the UI.
+ */
+const { version: packageVersion } = JSON.parse(
   readFileSync(fileURLToPath(new URL('./package.json', import.meta.url)), 'utf8'),
 ) as { version: string };
+const appVersion = packageVersion.split('.')[0];
 
 /**
  * Base build. Emits a normal multi-asset bundle into `dist/`.
