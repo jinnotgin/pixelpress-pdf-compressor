@@ -118,7 +118,7 @@ async function boot(): Promise<void> {
     const loadPyodide = pyodideModule.loadPyodide ?? pyodideModule.default?.loadPyodide;
     pyodide = await loadPyodide({ indexURL: PYODIDE_INDEX_URL });
     send('runtime', { status: 'loading', message: 'Loading PDF engine' });
-    await pyodide.loadPackage(['pymupdf']);
+    await pyodide.loadPackage(['pymupdf', 'pillow']);
     await pyodide.runPythonAsync(PYTHON_SOURCE);
     const opfs = Boolean(
       self.isSecureContext && navigator.storage && navigator.storage.getDirectory,

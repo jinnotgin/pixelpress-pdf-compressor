@@ -61,8 +61,8 @@ class FinalizeStageTests(unittest.TestCase):
         self.assertEqual(plan["pages"], 2)
         self.assertGreaterEqual(plan["embedded"], 2)
 
-        original = pymupdf.Page.replace_image
-        with patch.object(pymupdf.Page, "replace_image", autospec=True,
+        original = pymupdf.Document.xref_copy
+        with patch.object(pymupdf.Document, "xref_copy", autospec=True,
                           side_effect=original) as replace:
             for index in range(plan["images"]):
                 step = json.loads(pp.pp_optimize_image(self.job_id, index))
