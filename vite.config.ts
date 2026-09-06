@@ -4,14 +4,25 @@ import { fileURLToPath, URL } from 'node:url';
 import react from '@vitejs/plugin-react';
 import { defineConfig, type ViteUserConfig } from 'vitest/config';
 
-/**
- * Single source of truth for the app version: package.json. The footer shows
- * the major only (`v5`, not `v5.0.0`), so patch bumps don't churn the UI.
- */
+/** Single source of truth for the app version: package.json. */
 const { version: packageVersion } = JSON.parse(
   readFileSync(fileURLToPath(new URL('./package.json', import.meta.url)), 'utf8'),
 ) as { version: string };
-const appVersion = packageVersion.split('.')[0];
+
+/**
+ * Drop trailing zero segments so the footer stays as short as the version
+ * actually is: 5.0.0 -> "5", 5.1.0 -> "5.1", 5.1.2 -> "5.1.2", 5.0.3 -> "5.0.3".
+ * Always keeps at least the major.
+ */
+function shortenVersion(version: string): string {
+  const parts = version.split('.');
+  while (parts.length > 1 && parts[parts.length - 1] === '0') {
+    parts.pop();
+  }
+  return parts.join('.');
+}
+
+const appVersion = shortenVersion(packageVersion);
 
 /**
  * Base build. Emits a normal multi-asset bundle into `dist/`.
