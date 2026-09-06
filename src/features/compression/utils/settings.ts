@@ -19,7 +19,7 @@ export const DEFAULT_SETTINGS: Settings = {
   flattenDpi: 96,
   imageDetail: 'screen',
   jpegQuality: 78,
-  recognizeText: true,
+  recognizeText: false,
   ocrLanguage: 'eng',
 };
 

@@ -1,11 +1,16 @@
 # PixelPress
 
-A browser-only PDF compressor that automatically preserves efficient document
-pages and flattens clearly vector-heavy exports. A dedicated Figma preset keeps
-the original aggressive flattening workflow for screens and diagrams.
+A privacy-focused PDF compressor that processes your documents locally in your
+browser. Your PDFs stay on your device and are never uploaded to cloud services.
 
-Pyodide + PyMuPDF process PDFs and Tesseract handles optional multilingual OCR
-in a browser Web Worker. Nothing is uploaded to cloud services.
+PixelPress automatically preserves efficient document pages and flattens clearly
+vector-heavy exports. A dedicated Figma preset keeps the original aggressive
+flattening workflow for screens and diagrams.
+
+Pyodide + PyMuPDF process PDFs in a browser Web Worker. Optional multilingual OCR
+uses Tesseract locally and is off by default; enable it to add searchable text to
+pages without usable selectable text. Runtimes and OCR models are downloaded on
+first use, but document processing stays on your device.
 
 A Vite + React + TypeScript app, organised with a
 [bulletproof-react](https://github.com/alan2207/bulletproof-react) style
