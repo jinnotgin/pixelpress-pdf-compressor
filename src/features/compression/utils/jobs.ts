@@ -48,7 +48,7 @@ export function intakeFiles(
     if (!isPdf(file)) {
       rejected.push(`${file.name} is not a PDF`);
     } else if (file.size > MAX_FILE_BYTES) {
-      rejected.push(`${file.name} is larger than 250 MB`);
+      rejected.push(`${file.name} is larger than 500 MB`);
     } else {
       accepted.push({
         id: createJobId(),

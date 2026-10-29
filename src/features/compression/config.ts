@@ -1,7 +1,7 @@
 import { type ImageDetail, type JobStatus, type OcrLanguage } from './types';
 
 /** Hard upload ceiling per file. */
-export const MAX_FILE_BYTES = 250 * 1024 * 1024;
+export const MAX_FILE_BYTES = 500 * 1024 * 1024;
 
 /** How long finished results are kept in the Origin Private File System. */
 export const HISTORY_MAX_AGE_DAYS = 30;
