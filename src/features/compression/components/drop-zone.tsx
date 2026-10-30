@@ -49,7 +49,7 @@ export function DropZone({ compact = false, dragging, onDrag, onFiles }: DropZon
             <span className="drop-cta">
               <Icon name="plus" size={16} /> Choose PDF files
             </span>
-            <span className="drop-meta">Up to 500 MB per file</span>
+            <span className="drop-meta">Up to 250 MB per file</span>
           </span>
         )}
       </button>

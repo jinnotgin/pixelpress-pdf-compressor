@@ -37,12 +37,12 @@ describe('compareSizes', () => {
 describe('intakeFiles', () => {
   it('rejects non-pdf and oversized files with a reason', () => {
     const result = intakeFiles(
-      [file('a.pdf', 500 * 1024 * 1024), file('b.txt', 10, 'text/plain'), file('c.pdf', 500 * 1024 * 1024 + 1)],
+      [file('a.pdf', 10), file('b.txt', 10, 'text/plain'), file('c.pdf', 300 * 1024 * 1024)],
       DEFAULT_SETTINGS,
     );
     expect(result.accepted).toHaveLength(1);
     expect(result.accepted[0].name).toBe('a.pdf');
-    expect(result.rejected).toEqual(['b.txt is not a PDF', 'c.pdf is larger than 500 MB']);
+    expect(result.rejected).toEqual(['b.txt is not a PDF', 'c.pdf is larger than 250 MB']);
   });
 
   it('accepts by .pdf extension even without a mime type', () => {
