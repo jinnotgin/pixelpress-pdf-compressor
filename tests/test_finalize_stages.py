@@ -154,6 +154,78 @@ class FinalizeStageTests(unittest.TestCase):
         with pymupdf.open(self.output_path()) as output:
             self.assertEqual(output.metadata["title"], "Carried across")
 
+    def test_oversized_pages_fit_without_losing_text_or_links(self):
+        job = self.open_job()
+        job["output"].close()
+        output = job["output"] = pymupdf.open()
+        for width, height in [(17024, 7440), (21909, 5360)]:
+            page = output.new_page(width=width, height=height)
+            page.insert_text((width - 1000, height - 100), "Far edge", fontsize=100)
+        output[0].insert_link({"kind": pymupdf.LINK_GOTO, "from": pymupdf.Rect(100, 100, 500, 500),
+                               "page": 1, "to": pymupdf.Point(1000, 1000)})
+        output[1].insert_link({"kind": pymupdf.LINK_URI, "from": pymupdf.Rect(100, 100, 500, 500),
+                               "uri": "https://example.com"})
+        saved = json.loads(pp.pp_save_output(self.job_id, self.output_path()))
+        self.assertEqual(saved["resizedPages"], [0, 1])
+        with pymupdf.open(self.output_path()) as result:
+            for index, (width, height) in enumerate([(17024, 7440), (21909, 5360)]):
+                page = result[index]
+                self.assertAlmostEqual(page.rect.width, 14400, places=2)
+                self.assertAlmostEqual(page.rect.height, height * 14400 / width, places=2)
+                self.assertIn("Far edge", page.get_text())
+                self.assertAlmostEqual(page.get_links()[0]["from"].x0, 100 * 14400 / width, places=2)
+            self.assertAlmostEqual(result[0].get_links()[0]["to"].x, 1000 * 14400 / 21909, places=2)
+
+    def test_rotation_userunit_and_rendered_appearance_are_preserved(self):
+        job = self.open_job(1)
+        output = job["output"]
+        page = output[0]
+        page.set_mediabox(pymupdf.Rect(0, 0, 16000, 6000))
+        page.draw_rect(pymupdf.Rect(12000, 1000, 15000, 5000), fill=(1, 0, 0))
+        output.xref_set_key(page.xref, "UserUnit", "2")
+        page.set_rotation(90)
+        page = output.reload_page(page)
+        before = page.get_pixmap(matrix=pymupdf.Matrix(400 / page.rect.width, 400 / page.rect.width))
+        saved = json.loads(pp.pp_save_output(self.job_id, self.output_path()))
+        self.assertEqual(saved["resizedPages"], [0])
+        with pymupdf.open(self.output_path()) as result:
+            page = result[0]
+            self.assertEqual(page.rotation, 90)
+            self.assertLessEqual(max(page.rect.width, page.rect.height), 14400)
+            after = page.get_pixmap(matrix=pymupdf.Matrix(400 / page.rect.width, 400 / page.rect.width))
+            self.assertEqual((before.width, before.height), (after.width, after.height))
+            difference = sum(abs(a - b) for a, b in zip(before.samples, after.samples)) / len(before.samples)
+            self.assertLess(difference, 1)
+
+    def test_normal_and_exact_limit_pages_are_unchanged(self):
+        job = self.open_job()
+        job["output"][1].set_mediabox(pymupdf.Rect(0, 0, 14400, 1000))
+        original = job["output"]
+        saved = json.loads(pp.pp_save_output(self.job_id, self.output_path()))
+        self.assertEqual(saved["resizedPages"], [])
+        self.assertIs(job["output"], original)
+
+    def test_cropped_oversized_page_and_normal_page_in_same_document(self):
+        job = self.open_job()
+        output = job["output"]
+        output[0].set_mediabox(pymupdf.Rect(0, 0, 20000, 10000))
+        # A cropped page still needs repair when its raw MediaBox is too large.
+        output[0].set_cropbox(pymupdf.Rect(100, 100, 1100, 600))
+        normal_text = output[1].get_text()
+        saved = json.loads(pp.pp_save_output(self.job_id, self.output_path()))
+        self.assertEqual(saved["resizedPages"], [0])
+        with pymupdf.open(self.output_path()) as result:
+            self.assertEqual(result[0].rect, pymupdf.Rect(0, 0, 1000, 500))
+            self.assertEqual(result[1].rect, pymupdf.Rect(0, 0, 320, 320))
+            self.assertEqual(result[1].get_text(), normal_text)
+
+    def test_saved_dimensions_are_verified(self):
+        job = self.open_job()
+        job["output"][0].set_mediabox(pymupdf.Rect(0, 0, 20000, 10000))
+        with patch.object(pp, "_pp_fit_acrobat_pages", return_value=[]):
+            with self.assertRaisesRegex(RuntimeError, "saved PDF exceeds"):
+                pp.pp_save_output(self.job_id, self.output_path())
+
 
 if __name__ == "__main__":
     unittest.main()

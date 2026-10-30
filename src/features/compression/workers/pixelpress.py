@@ -13,6 +13,7 @@ _PP_MAX_OCR_PIXELS = 24_000_000
 # JPEG quality high to avoid sacrificing text recognition accuracy.
 _PP_OCR_JPEG_QUALITY = 92
 _PP_MAX_CODEC_PIXELS = 24_000_000
+_PP_MAX_PAGE_POINTS = 14_400
 _PP_IMAGE_SAVE_OPTIONS = dict(garbage=4, deflate=True, deflate_images=True,
                              deflate_fonts=True, use_objstms=True,
                              compression_effort=60, clean=False)
@@ -139,6 +140,7 @@ def pp_open(job_id, input_path, settings_json):
         "hasAnnotations": has_annotations,
         "hasLinks": has_links,
         "tagged": tagged,
+        "oversizedPages": _pp_oversized_pages(source),
     })
 
 def _pp_plan_images(document, dpi):
@@ -879,18 +881,97 @@ def pp_optimize_image(job_id, index):
     return json.dumps({"stopped": False, "changed": bool(changed)})
 
 
+def _pp_oversized_pages(document):
+    """Check both raw PDF coordinates and physical size (including UserUnit)."""
+    oversized = []
+    for page in document:
+        unit_type, unit_value = document.xref_get_key(page.xref, "UserUnit")
+        unit = float(unit_value) if unit_type in ("int", "float") else 1
+        extent = max(page.mediabox.width, page.mediabox.height,
+                     page.rect.width, page.rect.height,
+                     page.mediabox.width * unit, page.mediabox.height * unit)
+        if not math.isfinite(extent) or extent <= 0:
+            raise ValueError("The PDF contains invalid page dimensions.")
+        if extent > _PP_MAX_PAGE_POINTS:
+            oversized.append(page.number)
+    return oversized
+
+
+def _pp_fit_acrobat_pages(job):
+    """Fit oversized visible pages without rasterizing their text or graphics."""
+    source = job["output"]
+    oversized = _pp_oversized_pages(source)
+    if not oversized:
+        return []
+    # Reopen to flush cached link coordinates after earlier page rebuilding.
+    source = pymupdf.open(stream=source.tobytes(), filetype="pdf")
+    rebuilt = pymupdf.open()
+    rotations = [page.rotation for page in source]
+    scales = []
+    try:
+        for index, page in enumerate(source):
+            page.set_rotation(0)
+            if index not in oversized:
+                rebuilt.insert_pdf(source, from_page=index, to_page=index,
+                                   links=False, final=0)
+                scales.append(1)
+                continue
+            if page.first_annot or page.first_widget:
+                raise ValueError("Cannot resize a page with interactive annotations safely.")
+            scale = min(1, _PP_MAX_PAGE_POINTS / max(page.rect.width, page.rect.height))
+            scales.append(scale)
+            target = rebuilt.new_page(width=page.rect.width * scale,
+                                      height=page.rect.height * scale)
+            if page.get_contents():
+                target.show_pdf_page(target.rect, source, index)
+        # All destination pages must exist before internal links are inserted.
+        for index, page in enumerate(source):
+            for original in page.get_links():
+                link = dict(original)
+                link.pop("xref", None)
+                link.pop("id", None)
+                link["from"] = link["from"] * pymupdf.Matrix(scales[index], scales[index])
+                if link["kind"] == pymupdf.LINK_GOTO:
+                    destination = link.get("page", -1)
+                    if destination >= 0 and isinstance(link.get("to"), pymupdf.Point):
+                        link["to"] = link["to"] * scales[destination]
+                rebuilt[index].insert_link(link)
+        for index, rotation in enumerate(rotations):
+            rebuilt[index].set_rotation(rotation)
+        rebuilt.set_metadata(source.metadata)
+        rebuilt.set_toc(source.get_toc())
+        rebuilt.set_page_labels(source.get_page_labels())
+        if _pp_oversized_pages(rebuilt):
+            raise RuntimeError("Page resizing did not satisfy the Acrobat size limit.")
+    except Exception:
+        rebuilt.close()
+        source.close()
+        raise
+    job["output"].close()
+    job["output"] = rebuilt
+    source.close()
+    _pp_note_finalize_warning(
+        job, f"Resized {len(oversized)} oversized page(s) to fit within 200 × 200 inches "
+        "for Acrobat compatibility; aspect ratios were preserved.")
+    return oversized
+
+
 def pp_save_output(job_id, output_path):
     """Write and verify the PDF, reporting every warning finalisation collected."""
     job = _PP_JOBS[job_id]
+    resized = _pp_fit_acrobat_pages(job)
     job["output"].save(output_path, **_PP_IMAGE_SAVE_OPTIONS)
     with pymupdf.open(output_path) as verification:
         if len(verification) != job["pages"]:
             raise RuntimeError("The output page count did not match the source PDF.")
+        if _pp_oversized_pages(verification):
+            raise RuntimeError("The saved PDF exceeds the Acrobat page-size limit.")
     warnings = job.get("finalize_warnings") or []
     return json.dumps({
         "size": os.path.getsize(output_path),
         "warning": " ".join(warnings) if warnings else None,
         "recoveredPages": job.get("recovered_pages") or [],
+        "resizedPages": resized,
     })
 
 

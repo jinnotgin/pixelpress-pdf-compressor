@@ -12,6 +12,13 @@ uses Tesseract locally and is off by default; enable it to add searchable text t
 pages without usable selectable text. Runtimes and OCR models are downloaded on
 first use, but document processing stays on your device.
 
+Before saving, oversized pages are proportionally fitted within 14,400 PDF
+units and 200 inches on each side for Acrobat compatibility. This preserves
+visible content, selectable text, and supported links without another rasterization
+pass. The saved PDF is reopened to verify its dimensions, and a repaired result
+is kept even if it is larger than the original. Protected documents returned
+unchanged receive a warning when their page sizes exceed these limits.
+
 A Vite + React + TypeScript app, organised with a
 [bulletproof-react](https://github.com/alan2207/bulletproof-react) style
 architecture.

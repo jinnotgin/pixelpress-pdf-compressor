@@ -453,6 +453,9 @@ async function processJob({ id, file, settings, fallbacks = [] }: ProcessRequest
       tagged: Boolean(opened.tagged),
     };
     const deliverOriginal = async (message: string): Promise<void> => {
+      if (opened.oversizedPages?.length) {
+        message += ' This original contains oversized pages; Acrobat page-size compatibility has not been repaired.';
+      }
       send('warning', { id, message });
       const metadata = {
         originalName: file.name,
@@ -777,7 +780,9 @@ async function processJob({ id, file, settings, fallbacks = [] }: ProcessRequest
     }
     await terminateOCR();
 
-    const usedOriginal = finalized.size >= file.size && textSummary.ocrPages === 0;
+    const usedOriginal =
+      finalized.size >= file.size && textSummary.ocrPages === 0 &&
+      !finalized.resizedPages?.length;
     if (usedOriginal) send('warning', { id, message: ORIGINAL_KEPT_WARNING });
     const resultTextSummary = usedOriginal
       ? {
@@ -799,7 +804,7 @@ async function processJob({ id, file, settings, fallbacks = [] }: ProcessRequest
       settings,
       textSummary: resultTextSummary,
       usedOriginal,
-      warning: usedOriginal ? ORIGINAL_KEPT_WARNING : undefined,
+      warning: usedOriginal ? ORIGINAL_KEPT_WARNING : finalized.warning || undefined,
     };
     await deliverPdfResult({
       jobId: id,
